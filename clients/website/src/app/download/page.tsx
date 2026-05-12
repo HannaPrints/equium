@@ -131,16 +131,20 @@ chmod +x cloud-mine.sh
                 That's it.
               </P>
               <Callout tone="dim">
-                <strong>The miner auto-picks a working backend.</strong>{" "}
-                Each backend is probed in a child process before the
-                miner commits to it, so a driver SIGSEGV (looking at
-                you, NVIDIA 575.x's{" "}
-                <Code>libnvidia-glvkspirv.so</Code>) kills only the
-                probe and the parent silently falls back to GL. If you
-                ever want to override the choice, set{" "}
-                <Code>EQUIUM_BACKEND=vulkan|gl|metal|dx12</Code>. The
-                permanent fix for NVIDIA 575 crashes is the 535 LTS
-                driver: <Code>sudo apt install -y nvidia-driver-535-server</Code>.
+                <strong>The script handles every weird case for you.</strong>{" "}
+                The miner's backend auto-probe runs each candidate in
+                a subprocess (so a driver SIGSEGV in{" "}
+                <Code>libnvidia-glvkspirv.so</Code> kills only the
+                probe child, not your shell), and{" "}
+                <Code>cloud-mine.sh</Code> detects NVIDIA 575.x via{" "}
+                <Code>nvidia-smi</Code> and offers a one-keypress{" "}
+                <Code>apt install nvidia-driver-535-server</Code> + reboot
+                — the permanent fix for that branch's SPIR-V crash. After
+                reboot, rerun the script and it skips straight to mining
+                (RPC URL is saved at <Code>~/.config/equium/rpc</Code>).
+                Override the backend choice via{" "}
+                <Code>EQUIUM_BACKEND=vulkan|gl|metal|dx12</Code> if you
+                ever need to.
               </Callout>
               <Callout tone="dim">
                 <strong>Keep the keypair if you want to keep mining.</strong>{" "}
