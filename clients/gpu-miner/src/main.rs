@@ -90,6 +90,16 @@ enum Cmd {
         #[arg(long, default_value_t = 50u32)]
         iterations: u32,
     },
+    /// Internal: probe one wgpu backend and exit 0 on success. Spawned
+    /// as a subprocess by the auto-pick logic so a driver SIGSEGV
+    /// (e.g. NVIDIA 575's libnvidia-glvkspirv.so) doesn't take down
+    /// the parent. Not intended for direct user invocation.
+    #[command(hide = true)]
+    Probe {
+        /// Backend tag to probe (vulkan | gl | metal | dx12 | primary).
+        #[arg(long, default_value = "primary")]
+        backend: String,
+    },
     /// Mine. Defaults to v0.1 hybrid (GPU leaves + CPU Wagner). Pass
     /// `--full-gpu` to use the v0.2 all-on-GPU pipeline.
     Mine {
@@ -127,12 +137,32 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = Args::parse();
+
+    // Two subcommands skip the auto-probe:
+    //   - probe       — we're already inside a probe child; another
+    //                   level would recurse.
+    //   - verify-cpu  — pure CPU, never touches the GPU.
+    // Everything else picks a backend now and writes it to
+    // EQUIUM_BACKEND so all downstream `wgpu::Instance::new` calls
+    // honor the choice.
+    let needs_gpu = !matches!(args.cmd, Cmd::Probe { .. } | Cmd::VerifyCpu { .. });
+    if needs_gpu {
+        match auto_pick_backend() {
+            Ok(backend) => std::env::set_var("EQUIUM_BACKEND", backend),
+            Err(msg) => {
+                eprintln!("\n✗ {msg}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     match args.cmd {
         Cmd::Verify { leaves } => verify(leaves),
         Cmd::VerifyCpu { leaves } => verify_cpu(leaves),
         Cmd::Bench { iterations } => bench(iterations),
         Cmd::VerifyRounds { nonces } => verify_rounds(nonces),
         Cmd::BenchWagner { iterations } => bench_wagner(iterations),
+        Cmd::Probe { backend } => probe(&backend),
         Cmd::Mine {
             rpc_url,
             keypair,
@@ -141,6 +171,140 @@ fn main() -> Result<()> {
             threads,
             full_gpu,
         } => mine(rpc_url, keypair, max_blocks, cu_limit, threads, full_gpu),
+    }
+}
+
+/// Internal probe: create one wgpu backend's `GpuLeafGen` instance
+/// and exit zero on success. Always runs after `EQUIUM_BACKEND=<arg>`
+/// is set so the constructor honors our request. Stdout/stderr quiet
+/// on success (the parent only cares about the exit code).
+fn probe(backend: &str) -> Result<()> {
+    std::env::set_var("EQUIUM_BACKEND", backend);
+    // Just constructing the leaves pipeline is enough to trigger the
+    // SPIR-V compile path that crashes on bad NVIDIA drivers. If we
+    // reach the println, the backend is healthy.
+    let g = gpu::GpuLeafGen::new()?;
+    eprintln!("{}", g.adapter_name);
+    Ok(())
+}
+
+/// Auto-pick the best working GPU backend by probing each in
+/// subprocesses (so a driver segfault doesn't take us down). Returns
+/// the backend tag to use, or an error string for the operator if
+/// nothing works.
+///
+/// Order:
+///   1. If `EQUIUM_BACKEND` is set, respect it (escape hatch for
+///      power users — we trust them).
+///   2. If `nvidia-smi` reports a known-bad driver branch, skip
+///      Vulkan entirely and start with GL. Saves the user from
+///      waiting for the crash.
+///   3. Probe Vulkan via subprocess. If it segfaults or otherwise
+///      exits non-zero, fall through.
+///   4. Probe GL via subprocess. If that fails, return an error
+///      with troubleshooting steps.
+fn auto_pick_backend() -> std::result::Result<&'static str, String> {
+    if let Ok(forced) = std::env::var("EQUIUM_BACKEND") {
+        if !forced.trim().is_empty() {
+            eprintln!("backend: forced via EQUIUM_BACKEND={forced}");
+            return Ok(Box::leak(forced.into_boxed_str()) as &'static str);
+        }
+    }
+
+    // Skip Vulkan up-front if we see a driver that's been known to
+    // crash. The 575 branch ships a SPIR-V compiler that segfaults
+    // on otherwise-valid Naga output; downgrade to 535 LTS is the
+    // real fix but GL works as a stopgap.
+    let mut probe_order: Vec<&'static str> = vec!["vulkan", "gl"];
+    if let Some(drv) = nvidia_driver_version() {
+        if drv.starts_with("575.") {
+            eprintln!(
+                "⚠ Detected NVIDIA driver {drv} — known SPIR-V crash bug, \
+                 skipping Vulkan probe."
+            );
+            eprintln!("  Recommended fix: sudo apt install -y nvidia-driver-535-server && reboot");
+            probe_order = vec!["gl"];
+        }
+    }
+
+    let mut errors: Vec<String> = Vec::new();
+    for &backend in &probe_order {
+        eprint!("backend: probing {backend}… ");
+        match probe_subprocess(backend) {
+            Ok(name) => {
+                eprintln!("OK\n  ↳ {name}");
+                return Ok(backend);
+            }
+            Err(reason) => {
+                eprintln!("FAILED ({reason})");
+                errors.push(format!("{backend}: {reason}"));
+            }
+        }
+    }
+
+    Err(format!(
+        "No working GPU backend.\n\nProbes:\n  - {}\n\nTroubleshooting:\n  \
+        1. nvidia-smi              (driver present + healthy?)\n  \
+        2. vulkaninfo --summary    (Vulkan loader sees the GPU?)\n  \
+        3. lspci | grep -i vga     (kernel sees the card?)\n  \
+        4. On NVIDIA 575.x: sudo apt install -y nvidia-driver-535-server\n  \
+        5. File an issue: https://github.com/HannaPrints/equium/issues\n",
+        errors.join("\n  - ")
+    ))
+}
+
+/// Spawn `self probe --backend=<backend>` and read the result. The
+/// child has its own process space, so a SIGSEGV in the driver
+/// crashes the child cleanly without touching us.
+fn probe_subprocess(backend: &str) -> std::result::Result<String, String> {
+    use std::process::{Command, Stdio};
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("locate self: {e}"))?;
+    let out = Command::new(&exe)
+        .arg("probe")
+        .arg("--backend")
+        .arg(backend)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // Belt-and-suspenders: clear EQUIUM_BACKEND for the child so
+        // we don't recurse into the same forced choice.
+        .env_remove("EQUIUM_BACKEND")
+        .output()
+        .map_err(|e| format!("spawn: {e}"))?;
+    if out.status.success() {
+        let name = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        Ok(if name.is_empty() { backend.to_string() } else { name })
+    } else if let Some(code) = out.status.code() {
+        Err(format!("exit {code}"))
+    } else {
+        // No exit code → killed by a signal. On *nix the most common
+        // signal that hits us here is SIGSEGV from the driver.
+        Err("killed by signal (likely SIGSEGV — driver crash)".to_string())
+    }
+}
+
+/// Read the NVIDIA driver version via `nvidia-smi`. Returns None when
+/// nvidia-smi isn't present (AMD-only / Apple / etc.) or fails.
+fn nvidia_driver_version() -> Option<String> {
+    use std::process::Command;
+    let out = Command::new("nvidia-smi")
+        .args(["--query-gpu=driver_version", "--format=csv,noheader"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
     }
 }
 

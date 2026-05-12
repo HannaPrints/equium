@@ -131,17 +131,16 @@ chmod +x cloud-mine.sh
                 That's it.
               </P>
               <Callout tone="dim">
-                <strong>Known issue: NVIDIA driver 575.x.</strong>{" "}
-                That branch ships a SPIR-V compiler bug that segfaults
-                during pipeline creation. If <Code>verify</Code> crashes
-                in <Code>libnvidia-glvkspirv.so</Code>, either downgrade
-                to the 535 LTS driver (
-                <Code>
-                  sudo apt install -y nvidia-driver-535-server &amp;&amp; sudo reboot
-                </Code>
-                ), or run with the GL backend as a fallback:{" "}
-                <Code>EQUIUM_BACKEND=gl ./target/release/equium-gpu-miner mine …</Code>
-                . The bootstrap script auto-warns on detection.
+                <strong>The miner auto-picks a working backend.</strong>{" "}
+                Each backend is probed in a child process before the
+                miner commits to it, so a driver SIGSEGV (looking at
+                you, NVIDIA 575.x's{" "}
+                <Code>libnvidia-glvkspirv.so</Code>) kills only the
+                probe and the parent silently falls back to GL. If you
+                ever want to override the choice, set{" "}
+                <Code>EQUIUM_BACKEND=vulkan|gl|metal|dx12</Code>. The
+                permanent fix for NVIDIA 575 crashes is the 535 LTS
+                driver: <Code>sudo apt install -y nvidia-driver-535-server</Code>.
               </Callout>
               <Callout tone="dim">
                 <strong>Keep the keypair if you want to keep mining.</strong>{" "}

@@ -132,21 +132,12 @@ else
 fi
 PUBKEY=$(solana-keygen pubkey "$KEYPAIR_PATH")
 
-# ----- step 4: NVIDIA driver sanity ---------------------------------
-# Driver 575.x ships a SPIR-V compiler (libnvidia-glvkspirv.so) that
-# segfaults on otherwise-valid Naga output during pipeline creation.
-# Warn loudly so the user can downgrade before wasting their rental.
-if command -v nvidia-smi >/dev/null; then
-  DRV=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '[:space:]')
-  if [[ "$DRV" =~ ^575\. ]]; then
-    warn "Detected NVIDIA driver $DRV — this branch has a known SPIR-V"
-    warn "compiler crash in compute pipelines. Recommended:"
-    warn "  sudo apt install -y nvidia-driver-535-server && sudo reboot"
-    warn "Or try the GL backend with: EQUIUM_BACKEND=gl …"
-  fi
-fi
+# ----- step 4: GPU verify -------------------------------------------
+# The miner self-probes its wgpu backends in subprocesses: a SPIR-V
+# crash in the driver kills the child cleanly and the parent
+# auto-falls-back to GL. No env-var fiddling needed on the user's
+# side — we just print whatever choice it lands on.
 
-# ----- step 5: GPU verify -------------------------------------------
 info "Verifying GPU shader…"
 hr
 ./target/release/equium-gpu-miner verify
