@@ -66,7 +66,7 @@ export default function DownloadPage() {
             <Callout>
               <strong>No GPU at home? Rent one for ~$0.20/hr.</strong>{" "}
               <a
-                href="https://cloud.vast.ai?ref_id=536464&template_id=ba1c7c6ebefbaaaafcb29dbeceef266a"
+                href="https://cloud.vast.ai?ref_id=536464&template_id=464591d1d4a1c00586be4fbd8e820312"
                 target="_blank"
                 rel="noreferrer noopener"
                 className="text-[var(--color-rose)] hover:underline"
@@ -104,7 +104,7 @@ export default function DownloadPage() {
                   just hits "Rent" → SSH → ./cloud-mine.sh. */}
               <div className="my-5">
                 <a
-                  href="https://cloud.vast.ai?ref_id=536464&template_id=ba1c7c6ebefbaaaafcb29dbeceef266a"
+                  href="https://cloud.vast.ai?ref_id=536464&template_id=464591d1d4a1c00586be4fbd8e820312"
                   target="_blank"
                   rel="noreferrer noopener"
                   className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-[var(--color-rose)] text-[var(--color-bg)] font-bold text-[14px] hover:bg-[var(--color-rose-bright)] transition-colors"
