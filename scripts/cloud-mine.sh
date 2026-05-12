@@ -54,19 +54,77 @@ else
   fi
 fi
 
+# ----- pre-flight: catch show-stoppers before we waste 5 minutes ----
+# Each check either auto-fixes or bails with an actionable message
+# pointing at the right next step. Idempotent so a re-run after a
+# reboot picks up where we left off.
+
+# Detect Docker early — several pre-flight checks behave differently
+# inside containers (no swap, no reboot, no kernel module replace).
+IN_DOCKER=0
+if [[ -f /.dockerenv ]] || grep -q '/docker/\|/lxc/' /proc/1/cgroup 2>/dev/null; then
+  IN_DOCKER=1
+fi
+
+# Disk: cargo build's target/ + deps weigh ~3 GB. Bail early if HOME's
+# partition is tighter than that so the operator can rent a bigger
+# instance instead of waiting for the build to fail.
+disk_avail_gb=$(df -BG --output=avail "$HOME" 2>/dev/null | tail -1 | tr -dc '0-9')
+if [[ -n "$disk_avail_gb" && "$disk_avail_gb" -lt 5 ]]; then
+  fatal "Only ${disk_avail_gb} GB free in \$HOME — cargo build needs ~3 GB + Solana CLI + repo. Rent an instance with ≥10 GB disk, or set EQUIUM_DIR to a larger volume."
+fi
+
+# RAM: cargo build with optimizations needs ~2 GB during link. Small
+# vast.ai shapes (2-4 GB) OOM mid-build. Auto-add a 4 GB swap file
+# if we're short. Skip in Docker (containers usually can't swapon).
+ram_total_mb=$(awk '/MemTotal/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || echo 0)
+if [[ "$ram_total_mb" -gt 0 && "$ram_total_mb" -lt 2048 ]] && [[ $IN_DOCKER -eq 0 ]]; then
+  # Already have enough swap?
+  swap_mb=$(awk '/SwapTotal/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || echo 0)
+  if [[ "$swap_mb" -lt 2048 ]]; then
+    warn "Only ${ram_total_mb} MB RAM detected — cargo build will likely OOM."
+    printf "${C_BOLD}Add a 4 GB swap file at /equium-swap?${C_RESET} [Y/n]: "
+    read -r reply
+    if [[ ! "$reply" =~ ^[nN] ]]; then
+      info "Creating /equium-swap (this takes ~20s)…"
+      $SUDO dd if=/dev/zero of=/equium-swap bs=1M count=4096 status=none
+      $SUDO chmod 600 /equium-swap
+      $SUDO mkswap /equium-swap >/dev/null
+      $SUDO swapon /equium-swap
+      ok "Swap added — total now $(awk '/SwapTotal/ {print int($2 / 1024)}' /proc/meminfo) MB"
+    fi
+  fi
+fi
+
+# GPU presence: confirm there's actually a GPU we can talk to before
+# we install Vulkan + Rust + Solana CLI + build the miner. Saves the
+# operator from going through 5 min of setup only to find out their
+# "GPU instance" didn't actually provision one.
+gpu_present() {
+  command -v nvidia-smi >/dev/null && return 0
+  # AMD: /sys/class/drm/card0 has vendor 0x1002. Also `lspci`.
+  if command -v lspci >/dev/null; then
+    lspci -nn 2>/dev/null | grep -qiE 'vga|3d controller|display' && return 0
+  fi
+  [[ -e /dev/dri/card0 || -e /dev/nvidia0 ]] && return 0
+  return 1
+}
+if ! gpu_present; then
+  warn "No GPU detected (no nvidia-smi, no /dev/dri, no PCI display device)."
+  warn "If this is supposed to be a GPU instance, the provider may have shipped a non-GPU node."
+  warn "Falling back to CPU-only mining isn't going to be profitable on a cloud instance —"
+  warn "the browser miner (https://equium.xyz/mine) is a better option for CPU/no-GPU users."
+  printf "${C_BOLD}Continue anyway?${C_RESET} [y/N]: "
+  read -r reply
+  [[ "$reply" =~ ^[yY] ]] || fatal "Stopping. Rent a GPU instance or use https://equium.xyz/mine."
+fi
+
 # Friendly tmux/screen hint so the user doesn't lose progress on a
 # stale SSH connection. Cloud GPU rentals get expensive if a network
 # blip kicks you off and the miner stops.
 if [[ -z "${TMUX:-}" && -z "${STY:-}" && -t 1 ]]; then
   warn "Tip: run this inside ${C_BOLD}tmux${C_RESET}${C_GOLD} or ${C_BOLD}screen${C_RESET}${C_GOLD} so an SSH drop doesn't kill the miner."
   warn "   apt install -y tmux && tmux new -s eqm   # then ./cloud-mine.sh"
-fi
-
-# Docker detection: containers can't reboot the host, so the
-# driver-downgrade flow doesn't apply there.
-IN_DOCKER=0
-if [[ -f /.dockerenv ]] || grep -q '/docker/\|/lxc/' /proc/1/cgroup 2>/dev/null; then
-  IN_DOCKER=1
 fi
 
 # Persistent config dir — lets us remember the RPC URL across reboots
@@ -210,22 +268,72 @@ hr
 # ----- step 5: RPC URL ----------------------------------------------
 # Priority: env var > saved file > interactive prompt. Save once
 # entered so a reboot/rerun skips this step.
+# Mainnet genesis hash — every Solana mainnet validator returns this
+# from getGenesisHash, regardless of the RPC provider. We check it on
+# every URL the user pastes so a devnet/testnet endpoint can't waste
+# their session.
+MAINNET_GENESIS="5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d"
+
+# Validate that an RPC URL responds + points at mainnet. Returns 0
+# (ok), 1 (unreachable), 2 (wrong cluster). Echoes the cluster name
+# we detected on stderr so the operator sees what went wrong.
+validate_rpc() {
+  local url="$1"
+  local resp
+  resp=$(curl --max-time 8 -fsSL -X POST -H 'Content-Type: application/json' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"getGenesisHash"}' \
+      "$url" 2>/dev/null || true)
+  if [[ -z "$resp" ]]; then
+    echo "no response from RPC (network / TLS / bad URL)" >&2
+    return 1
+  fi
+  # Naive parse — we don't ship jq dependency. The genesis hash is
+  # always 32-44 base58 chars inside `"result":"..."`.
+  local got
+  got=$(printf '%s' "$resp" | sed -n 's/.*"result":"\([^"]*\)".*/\1/p')
+  if [[ -z "$got" ]]; then
+    echo "RPC responded but no result field — wrong JSON-RPC dialect?" >&2
+    return 1
+  fi
+  if [[ "$got" != "$MAINNET_GENESIS" ]]; then
+    # Identify common alternatives so the message is actionable.
+    case "$got" in
+      EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG) echo "endpoint is devnet" >&2 ;;
+      4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY) echo "endpoint is testnet" >&2 ;;
+      *) echo "endpoint genesis ${got:0:12}… ≠ mainnet" >&2 ;;
+    esac
+    return 2
+  fi
+  return 0
+}
+
 RPC_URL="${EQUIUM_RPC_URL:-}"
 if [[ -z "$RPC_URL" && -f "$RPC_FILE" ]]; then
   RPC_URL=$(<"$RPC_FILE")
   ok "Reusing saved RPC: $(printf '%.40s…' "$RPC_URL")"
 fi
-if [[ -z "$RPC_URL" ]]; then
-  printf "\n${C_BOLD}Paste your Helius (or other) mainnet RPC URL${C_RESET}\n"
-  printf "${C_DIM}  Free key: https://www.helius.dev (5-minute signup)${C_RESET}\n"
-  read -r -p "RPC URL: " RPC_URL
-  if [[ ! "$RPC_URL" =~ ^https?:// ]]; then
-    fatal "RPC URL must start with http:// or https://"
+
+# Loop until we have a working + mainnet RPC URL.
+while true; do
+  if [[ -z "$RPC_URL" ]]; then
+    printf "\n${C_BOLD}Paste your Helius (or other) mainnet RPC URL${C_RESET}\n"
+    printf "${C_DIM}  Free key: https://www.helius.dev (5-minute signup)${C_RESET}\n"
+    read -r -p "RPC URL: " RPC_URL
   fi
-  printf '%s\n' "$RPC_URL" > "$RPC_FILE"
-  chmod 600 "$RPC_FILE"
-  ok "Saved to $RPC_FILE (use \`rm $RPC_FILE\` to forget)"
-fi
+  if [[ ! "$RPC_URL" =~ ^https?:// ]]; then
+    warn "RPC URL must start with http:// or https://"
+    RPC_URL=""
+    continue
+  fi
+  info "Validating RPC (cluster + reachability)…"
+  case "$(validate_rpc "$RPC_URL"; echo "::$?")" in
+    *::0) ok "RPC reachable + on mainnet." ; break ;;
+    *::1) warn "RPC unreachable — typo? firewall? Try another URL." ; RPC_URL="" ; continue ;;
+    *::2) warn "That endpoint isn't mainnet — paste your mainnet URL." ; RPC_URL="" ; continue ;;
+  esac
+done
+printf '%s\n' "$RPC_URL" > "$RPC_FILE"
+chmod 600 "$RPC_FILE"
 
 # ----- step 6: funding ----------------------------------------------
 # Check current balance first — if already funded from a previous
