@@ -196,6 +196,15 @@ export default function DownloadPage() {
                 ever need to.
               </Callout>
               <Callout tone="dim">
+                <strong>Something not working?</strong> Run{" "}
+                <Code>./cloud-mine.sh --doctor</Code> for a one-page
+                redacted report (OS / GPU / drivers / Vulkan / tool
+                versions / repo state / recent logs) you can paste
+                into a GitHub issue. Helius API keys + tokens are
+                stripped automatically; keypair contents are never
+                read.
+              </Callout>
+              <Callout tone="dim">
                 <strong>Keep the keypair if you want to keep mining.</strong>{" "}
                 vast.ai instances are ephemeral — when you stop the
                 rental, the box goes away. Copy{" "}

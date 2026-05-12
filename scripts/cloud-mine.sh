@@ -83,6 +83,115 @@ spin() {
   fi
 }
 
+# ----- doctor mode --------------------------------------------------
+# `./cloud-mine.sh --doctor` prints a single markdown report the
+# operator can paste into a GitHub issue or a chat. Captures the
+# things that actually matter for debugging a cloud-rented miner:
+# OS / GPU / drivers / Vulkan / disk / RAM / tool versions / repo
+# state / recent log tails. Redacts the Helius API key out of any RPC
+# URL it finds. Doesn't read keypair files.
+doctor() {
+  # We're allowed (and expected) to call commands that don't exist
+  # here. Disable -e + pipefail just for the doctor function so a
+  # missing nvidia-smi / vulkaninfo doesn't abort the whole report.
+  set +e
+  set +o pipefail
+  local out
+  out=$(mktemp -t equium-doctor-XXXXXX.md)
+  exec 3>"$out"
+
+  # Helper: redact api-key=… from URLs.
+  redact() { sed -E 's#api-key=[A-Za-z0-9_-]+#api-key=<redacted>#g; s#token=[A-Za-z0-9_-]+#token=<redacted>#g'; }
+
+  # Helper: capture a command's output (stdout + stderr) into the
+  # report with a fenced section header. Truncates long output.
+  cap() {
+    local title="$1"; shift
+    printf '## %s\n```\n' "$title" >&3
+    "$@" 2>&1 | redact | head -40 >&3
+    printf '```\n\n' >&3
+  }
+  capfile() {
+    local title="$1" path="$2"
+    printf '## %s\n```\n' "$title" >&3
+    if [[ -f "$path" ]]; then
+      tail -30 "$path" 2>/dev/null | redact >&3
+    else
+      printf '(not present)\n' >&3
+    fi
+    printf '```\n\n' >&3
+  }
+
+  printf '# Equium doctor report\n\n_%s_\n\n' "$(date -u +%FT%TZ)" >&3
+  cap "OS"           bash -c 'uname -a; cat /etc/os-release 2>/dev/null | head -6'
+  cap "CPU + RAM"    bash -c 'lscpu 2>/dev/null | grep -E "Model name|Socket|Thread|Core|CPU\(s\)" | head -8; echo "---"; free -h 2>/dev/null'
+  cap "Disk"         bash -c 'df -hT "$HOME" / 2>/dev/null'
+  cap "Container"    bash -c '[[ -f /.dockerenv ]] && echo "docker: yes" || echo "docker: no"; head -2 /proc/1/cgroup 2>/dev/null'
+  cap "PCI display"  bash -c 'lspci 2>/dev/null | grep -iE "vga|3d controller|display" | head -4'
+  cap "NVIDIA"       bash -c 'command -v nvidia-smi >/dev/null && nvidia-smi --query-gpu=name,driver_version,memory.total,utilization.gpu,temperature.gpu --format=csv 2>/dev/null || echo "(no nvidia-smi)"'
+  cap "Vulkan"       bash -c 'command -v vulkaninfo >/dev/null && (vulkaninfo --summary 2>&1 | head -25) || echo "(no vulkaninfo)"'
+  cap "/dev nodes"   bash -c 'ls -la /dev/dri/ 2>/dev/null; ls /dev/nvidia* 2>/dev/null'
+  cap "Tool versions" bash -c '
+    command -v rustc >/dev/null && rustc --version || echo "rustc: missing"
+    command -v cargo >/dev/null && cargo --version || echo "cargo: missing"
+    command -v solana >/dev/null && solana --version || echo "solana: missing"
+    command -v solana-keygen >/dev/null && solana-keygen --version || echo "solana-keygen: missing"'
+
+  local repo="${EQUIUM_DIR:-$HOME/equium}"
+  cap "Repo"         bash -c "
+    if [[ -d '$repo/.git' ]]; then
+      cd '$repo'
+      echo path: '$repo'
+      git log -1 --oneline 2>/dev/null
+      echo built: \$(test -x target/release/equium-gpu-miner && stat -c %y target/release/equium-gpu-miner 2>/dev/null || echo 'no binary')
+    else
+      echo '(no repo at $repo)'
+    fi"
+
+  cap "Wallet" bash -c '
+    KP="${EQUIUM_KEYPAIR:-$HOME/.config/solana/id.json}"
+    if [[ -f "$KP" ]]; then
+      PK=$(solana-keygen pubkey "$KP" 2>/dev/null || echo "?")
+      echo "keypair: $KP (exists, $(stat -c %s "$KP" 2>/dev/null) bytes)"
+      echo "pubkey: $PK"
+      # Balance only if RPC is set — we already redact above.
+      RPC_F="$HOME/.config/equium/rpc"
+      if [[ -f "$RPC_F" ]]; then
+        URL=$(cat "$RPC_F")
+        BAL=$(solana balance "$PK" --url "$URL" 2>/dev/null || echo "(query failed)")
+        echo "balance: $BAL"
+      else
+        echo "balance: (no saved RPC)"
+      fi
+    else
+      echo "(no keypair at $KP)"
+    fi'
+
+  cap "Backend probe (live)" bash -c "
+    BIN='$repo/target/release/equium-gpu-miner'
+    if [[ -x \"\$BIN\" ]]; then
+      \"\$BIN\" probe --backend vulkan 2>&1 | head -3
+      \"\$BIN\" probe --backend gl 2>&1 | head -3
+    else
+      echo '(miner not built)'
+    fi"
+
+  capfile "Onstart log"         /var/log/equium-onstart.log
+  capfile "Bootstrap log (last build)" "/tmp/$(ls -1t /tmp/equium-spin-*.log 2>/dev/null | head -1 | xargs -I{} basename {})"
+
+  exec 3>&-
+  cat "$out"
+  echo
+  echo "→ Report written to $out"
+  echo "→ Paste the block above into an Equium issue / chat for debugging help."
+}
+
+# Arg parse: a single `--doctor` flag short-circuits everything below.
+if [[ "${1:-}" == "--doctor" || "${1:-}" == "-d" ]]; then
+  doctor
+  exit 0
+fi
+
 # ----- preflight ------------------------------------------------------
 hr
 printf "${C_BOLD}Equium cloud-mine bootstrap${C_RESET}\n"
