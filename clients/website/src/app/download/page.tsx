@@ -141,15 +141,16 @@ export default function DownloadPage() {
                   template.</strong> Saves driver-debugging time.
                 </li>
                 <li>
-                  <strong>Driver 535 / 545 / 550.</strong> Confirmed
-                  working. <strong>Avoid 555 / 565 / 570 / 575</strong>{" "}
-                  — that branch ships a SPIR-V compiler bug that
-                  crashes our compute pipelines.{" "}
-                  <Code>cloud-mine.sh</Code> auto-detects it on bare
-                  metal and offers a downgrade, but inside a vast.ai
-                  Docker container the driver belongs to the host and
-                  can't be replaced from inside — so pick a different
-                  listing rather than burn the rental.
+                  <strong>Check the Driver Version column.</strong>{" "}
+                  535 / 545 / 550 are confirmed working;{" "}
+                  <strong>avoid 555 / 565 / 570 / 575</strong> — that
+                  open-driver branch crashes our compute pipelines
+                  with a SPIR-V compiler bug. Most current vast.ai
+                  hosts run 555+, so our template can't filter them
+                  out structurally — eyeball the column on each
+                  candidate. If you land on a bad one anyway, the
+                  miner's auto-probe tells you within ~5 seconds and
+                  you can stop the rental before it costs anything.
                 </li>
               </ul>
             </Block>
