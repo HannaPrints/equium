@@ -322,6 +322,28 @@ maybe_fix_nvidia() {
   if ! command -v nvidia-smi >/dev/null; then
     return 0
   fi
+
+  # In Docker/containers, nvidia-smi may exist but fail with
+  # "Driver/library version mismatch" if the container's NVML
+  # library version differs from the host kernel module.
+  # Installing a new driver inside a container cannot fix this —
+  # it would make the mismatch worse. Detect and bail early.
+  if [[ $IN_DOCKER -eq 1 ]]; then
+    local nvml_check
+    nvml_check=$(nvidia-smi 2>&1)
+    if echo "$nvml_check" | grep -q "Driver/library version mismatch\|Failed to initialize NVML"; then
+      warn "nvidia-smi reports a Driver/library version mismatch inside this container."
+      warn "This is a host-side issue — the container image NVML library does not match"
+      warn "the host kernel module. Installing a driver inside the container cannot fix it."
+      warn ""
+      warn "Solutions:"
+      warn "  1. Stop this rental and pick a Vast.ai/Runpod instance with a matching driver."
+      warn "  2. Use the CUDA backend if nvidia-smi works after container restart."
+      warn "  3. The miner will fall back to Vulkan/GL automatically."
+      return 0
+    fi
+  fi
+
   local drv
   drv=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '[:space:]')
   # The NVIDIA open-driver branch (555 / 565 / 570 / 575) all ship a
