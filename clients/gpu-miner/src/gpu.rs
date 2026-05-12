@@ -12,6 +12,23 @@ use bytemuck::{Pod, Zeroable};
 use std::borrow::Cow;
 use wgpu::util::DeviceExt;
 
+/// Backend-agnostic interface for leaf generation. Both
+/// `gpu::GpuLeafGen` (wgpu) and `cuda::CudaLeafGen` implement this so
+/// the rest of the miner can use whichever backend the probe picked
+/// without caring how it gets to the GPU. Send + Sync because the
+/// hybrid mining loop hands out an `Arc<dyn LeafGen>` across worker
+/// threads.
+pub trait LeafGen: Send + Sync {
+    fn backend_label(&self) -> &str;
+    fn generate(
+        &self,
+        input: &[u8; 81],
+        nonce: &[u8; 32],
+        n_leaves: u32,
+        out: &mut [u8],
+    ) -> anyhow::Result<()>;
+}
+
 /// Equihash 96,5 leaf size in bytes (n / 8).
 pub const LEAF_BYTES: usize = 12;
 
@@ -79,6 +96,12 @@ pub fn backends_from_env() -> wgpu::Backends {
         "dx12" => wgpu::Backends::DX12,
         "all" => wgpu::Backends::all(),
         "" | "primary" | "auto" => wgpu::Backends::PRIMARY,
+        // "cuda" is a sentinel handled by main.rs's dispatch — if we
+        // got here with cuda set it means a wgpu path is being
+        // constructed deliberately (e.g. fallback within the same
+        // process). Silently route to PRIMARY rather than spam a
+        // warning that confuses operators.
+        "cuda" => wgpu::Backends::PRIMARY,
         s => {
             eprintln!("EQUIUM_BACKEND='{s}' unrecognized — using PRIMARY");
             wgpu::Backends::PRIMARY
@@ -336,3 +359,18 @@ impl GpuLeafGen {
     }
 }
 
+
+impl LeafGen for GpuLeafGen {
+    fn backend_label(&self) -> &str {
+        &self.adapter_name
+    }
+    fn generate(
+        &self,
+        input: &[u8; 81],
+        nonce: &[u8; 32],
+        n_leaves: u32,
+        out: &mut [u8],
+    ) -> anyhow::Result<()> {
+        GpuLeafGen::generate(self, input, nonce, n_leaves, out)
+    }
+}

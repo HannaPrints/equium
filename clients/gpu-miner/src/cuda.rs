@@ -17,6 +17,7 @@
 //! one drifts the divergence shows up immediately in
 //! `verify-cpu` and `verify`.
 
+use crate::gpu::LeafGen;
 use anyhow::{anyhow, Context, Result};
 use cudarc::driver::{CudaContext, CudaFunction, CudaModule, LaunchConfig, PushKernelArg};
 use std::sync::Arc;
@@ -142,5 +143,20 @@ impl CudaLeafGen {
             .memcpy_dtoh(&leaves_d, &mut out[..leaves_bytes])
             .map_err(|e| anyhow!("dtoh leaves: {e:?}"))?;
         Ok(())
+    }
+}
+
+impl LeafGen for CudaLeafGen {
+    fn backend_label(&self) -> &str {
+        &self.adapter_name
+    }
+    fn generate(
+        &self,
+        input: &[u8; 81],
+        nonce: &[u8; 32],
+        n_leaves: u32,
+        out: &mut [u8],
+    ) -> anyhow::Result<()> {
+        CudaLeafGen::generate(self, input, nonce, n_leaves, out)
     }
 }

@@ -396,9 +396,22 @@ fn fixed_test_input() -> ([u8; I_LEN], [u8; 32]) {
     (input, nonce)
 }
 
+/// Construct a leaf-generation backend honoring `EQUIUM_BACKEND`.
+/// When the `cuda` feature is on and EQUIUM_BACKEND=cuda we build a
+/// `CudaLeafGen` (bypassing wgpu's Vulkan/SPIR-V path entirely);
+/// otherwise we fall through to the wgpu `GpuLeafGen` which honors
+/// the standard primary/vulkan/gl/metal/dx12 tags.
+fn make_leaf_gen() -> Result<Box<dyn gpu::LeafGen>> {
+    #[cfg(feature = "cuda")]
+    if std::env::var("EQUIUM_BACKEND").as_deref() == Ok("cuda") {
+        return Ok(Box::new(cuda::CudaLeafGen::new()?));
+    }
+    Ok(Box::new(gpu::GpuLeafGen::new()?))
+}
+
 fn verify(n_leaves: u32) -> Result<()> {
-    let gpu = gpu::GpuLeafGen::new()?;
-    println!("GPU backend: {}", gpu.adapter_name);
+    let gpu = make_leaf_gen()?;
+    println!("GPU backend: {}", gpu.backend_label());
 
     let (input, nonce) = fixed_test_input();
 
@@ -502,8 +515,8 @@ fn verify_cpu(n_leaves: u32) -> Result<()> {
 }
 
 fn bench(iterations: u32) -> Result<()> {
-    let gpu = gpu::GpuLeafGen::new()?;
-    println!("GPU backend: {}", gpu.adapter_name);
+    let gpu = make_leaf_gen()?;
+    println!("GPU backend: {}", gpu.backend_label());
 
     let (input, nonce) = fixed_test_input();
     let n_leaves: u32 = 1 << 17; // 131,072 — full Equihash 96,5 width
@@ -679,10 +692,12 @@ fn mine(
     threads: usize,
     full_gpu: bool,
 ) -> Result<()> {
-    // Two pipelines: v0.1 hybrid uses GpuLeafGen + CPU Wagner workers;
-    // v0.2 full_gpu uses GpuWagner single-threaded.
-    let leaf_gen = if !full_gpu {
-        Some(Arc::new(gpu::GpuLeafGen::new()?))
+    // Two pipelines: v0.1 hybrid uses a LeafGen + CPU Wagner workers;
+    // v0.2 full_gpu uses GpuWagner single-threaded. v0.2 is wgpu-only
+    // for now (CUDA Wagner kernels TODO); --full-gpu with EQUIUM_BACKEND=cuda
+    // falls back to the hybrid path automatically.
+    let leaf_gen: Option<Arc<dyn gpu::LeafGen>> = if !full_gpu {
+        Some(Arc::from(make_leaf_gen()?))
     } else {
         None
     };
@@ -692,7 +707,7 @@ fn mine(
         None
     };
     let adapter_name = match (&leaf_gen, &wagner_gpu) {
-        (Some(g), _) => g.adapter_name.clone(),
+        (Some(g), _) => g.backend_label().to_string(),
         (_, Some(w)) => w.adapter_name.clone(),
         _ => unreachable!(),
     };
@@ -858,7 +873,7 @@ fn mine(
 /// generation to the shared GPU and running Wagner CPU-side. First
 /// thread to find a below-target solution wins.
 fn race_for_solution_gpu(
-    gpu: Arc<gpu::GpuLeafGen>,
+    gpu: Arc<dyn gpu::LeafGen>,
     input: &[u8; I_LEN],
     target: &[u8; 32],
     threads: usize,
