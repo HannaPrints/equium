@@ -9,6 +9,17 @@ description = "GPU-accelerated CLI miner for Equium ($EQM). BLAKE2b leaf generat
 name = "equium-gpu-miner"
 path = "src/main.rs"
 
+# Build-time feature: when enabled, build.rs invokes nvcc to compile
+# the CUDA kernels in cuda/*.cu into PTX and embed them in the
+# binary. Lets us bypass the NVIDIA Vulkan SPIR-V crash on driver
+# branches 555–575 (see clients/gpu-miner/src/cuda.rs). Off by
+# default so non-CUDA builds (macOS, Windows-without-CUDA, AMD)
+# stay clean. cloud-mine.sh sets it on Linux NVIDIA boxes where
+# nvcc is installed.
+[features]
+default = []
+cuda = ["dep:cudarc"]
+
 [dependencies]
 equihash-core = { path = "../../crates/equihash-core", features = ["solver"] }
 equium = { path = "../../programs/equium", features = ["no-entrypoint"] }
@@ -36,6 +47,13 @@ equihash = { workspace = true }
 wgpu = "24"
 bytemuck = { version = "1", features = ["derive"] }
 pollster = "0.4"
+
+# Optional: cudarc gives us a high-level safe wrapper around the
+# CUDA Driver API. `dynamic-loading` makes libcuda an at-runtime
+# dependency (dlopen) so the wgpu-only build still runs on hosts
+# without CUDA installed. Only pulled in when --features cuda is
+# active (see [features] above).
+cudarc = { version = "0.16", default-features = false, features = ["driver", "dynamic-loading", "cuda-12040"], optional = true }
 
 [dev-dependencies]
 # naga lets us parse + validate WGSL shaders in `cargo test` without

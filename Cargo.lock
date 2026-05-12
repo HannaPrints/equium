@@ -1282,6 +1282,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cudarc"
+version = "0.16.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17200eb07e7d85a243aa1bf4569a7aa998385ba98d14833973a817a63cc86e92"
+dependencies = [
+ "libloading",
+]
+
+[[package]]
 name = "curve25519-dalek"
 version = "3.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1642,6 +1651,7 @@ dependencies = [
  "bytemuck",
  "clap",
  "crossbeam-channel",
+ "cudarc",
  "env_logger 0.11.10",
  "equihash",
  "equihash-core",
@@ -1661,6 +1671,7 @@ dependencies = [
 name = "equium-wasm"
 version = "0.1.0"
 dependencies = [
+ "equihash",
  "equihash-core",
  "wasm-bindgen",
 ]

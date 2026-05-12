@@ -422,6 +422,23 @@ if ! command -v solana-keygen >/dev/null; then
 fi
 ok "Solana CLI present"
 
+# CUDA toolkit — when an NVIDIA GPU is here we'd rather build the
+# CUDA backend, since it bypasses the SPIR-V driver crash that
+# bricks Vulkan on the 555–575 driver branch. The runtime CUDA base
+# image vast.ai ships doesn't include nvcc; install it on demand.
+USE_CUDA=0
+if command -v nvidia-smi >/dev/null; then
+  if ! command -v nvcc >/dev/null; then
+    spin "Installing CUDA toolkit (nvcc)" \
+      $SUDO apt-get install -y -qq nvidia-cuda-toolkit \
+        || warn "nvcc install failed — building wgpu-only path instead."
+  fi
+  if command -v nvcc >/dev/null; then
+    USE_CUDA=1
+    ok "CUDA toolkit present ($(nvcc --version 2>/dev/null | grep -oE 'V[0-9.]+' | head -1))"
+  fi
+fi
+
 # ----- step 2: source + build ---------------------------------------
 REPO_DIR="${EQUIUM_DIR:-$HOME/equium}"
 if [[ -d "$REPO_DIR/.git" ]]; then
@@ -434,22 +451,32 @@ else
 fi
 cd "$REPO_DIR"
 
+# Build invocation. With CUDA enabled we add --features cuda so the
+# CUDA backend (and its build.rs nvcc step) is compiled in. Cache the
+# feature choice in a marker file so a re-run with toggled CUDA
+# availability forces a rebuild.
+cuda_marker=target/release/.equium-cuda-feature
+build_cmd=(cargo build --release --quiet -p equium-gpu-miner)
+expected_marker="0"
+if [[ $USE_CUDA -eq 1 ]]; then
+  build_cmd+=(--features cuda)
+  expected_marker="1"
+fi
+
 need_build=1
 if [[ -x target/release/equium-gpu-miner ]]; then
-  # Cheap freshness check: rebuild only if source touched after binary.
   src_mtime=$(stat -c %Y clients/gpu-miner/src/main.rs 2>/dev/null || echo 0)
   bin_mtime=$(stat -c %Y target/release/equium-gpu-miner 2>/dev/null || echo 0)
-  if [[ "$src_mtime" -le "$bin_mtime" ]]; then
+  current_marker=$(cat "$cuda_marker" 2>/dev/null || echo "")
+  if [[ "$src_mtime" -le "$bin_mtime" && "$current_marker" == "$expected_marker" ]]; then
     need_build=0
     ok "equium-gpu-miner up to date — skipping build"
   fi
 fi
 if [[ $need_build -eq 1 ]]; then
-  # Suppress the unactionable warning spam from anchor/solana_sdk
-  # transitive crates — the spinner shows progress instead. The full
-  # log only surfaces if the build actually fails.
-  spin "Building equium-gpu-miner (release, ~1–3 min)" \
-    cargo build --release --quiet -p equium-gpu-miner
+  spin "Building equium-gpu-miner (release, ~1–3 min)" "${build_cmd[@]}"
+  mkdir -p "$(dirname "$cuda_marker")"
+  printf '%s\n' "$expected_marker" > "$cuda_marker"
 fi
 
 # ----- step 3: keypair ----------------------------------------------

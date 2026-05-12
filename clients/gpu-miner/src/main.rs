@@ -42,6 +42,8 @@ use std::time::{Duration, Instant};
 mod gpu;
 mod shader_ref;
 mod wagner;
+#[cfg(feature = "cuda")]
+mod cuda;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Equium GPU miner")]
@@ -175,15 +177,23 @@ fn main() -> Result<()> {
     }
 }
 
-/// Internal probe: create one wgpu backend's `GpuLeafGen` instance
-/// and exit zero on success. Always runs after `EQUIUM_BACKEND=<arg>`
-/// is set so the constructor honors our request. Stdout/stderr quiet
-/// on success (the parent only cares about the exit code).
+/// Internal probe: construct one backend's leaves pipeline and exit
+/// zero on success. Always runs after `EQUIUM_BACKEND=<arg>` is set
+/// so the wgpu constructor honors our request. The "cuda" backend
+/// short-circuits to the cudarc path instead; "vulkan" / "gl" go
+/// through wgpu. Stdout/stderr quiet on success (parent only cares
+/// about the exit code).
 fn probe(backend: &str) -> Result<()> {
+    #[cfg(feature = "cuda")]
+    if backend == "cuda" {
+        let g = cuda::CudaLeafGen::new()?;
+        eprintln!("{}", g.adapter_name);
+        return Ok(());
+    }
     std::env::set_var("EQUIUM_BACKEND", backend);
-    // Just constructing the leaves pipeline is enough to trigger the
-    // SPIR-V compile path that crashes on bad NVIDIA drivers. If we
-    // reach the println, the backend is healthy.
+    // Constructing the leaves pipeline triggers the SPIR-V compile
+    // path that crashes on bad NVIDIA drivers. If we reach the
+    // println, the backend is healthy.
     let g = gpu::GpuLeafGen::new()?;
     eprintln!("{}", g.adapter_name);
     Ok(())
@@ -195,15 +205,13 @@ fn probe(backend: &str) -> Result<()> {
 /// nothing works.
 ///
 /// Order:
-///   1. If `EQUIUM_BACKEND` is set, respect it (escape hatch for
-///      power users — we trust them).
-///   2. If `nvidia-smi` reports a known-bad driver branch, skip
-///      Vulkan entirely and start with GL. Saves the user from
-///      waiting for the crash.
-///   3. Probe Vulkan via subprocess. If it segfaults or otherwise
-///      exits non-zero, fall through.
-///   4. Probe GL via subprocess. If that fails, return an error
-///      with troubleshooting steps.
+///   1. If `EQUIUM_BACKEND` is set, respect it (escape hatch).
+///   2. CUDA (when compiled in via --features cuda) — bypasses the
+///      SPIR-V driver bug entirely. NVIDIA-only.
+///   3. Vulkan via subprocess — preferred for non-NVIDIA hosts +
+///      NVIDIA hosts on healthy driver branches.
+///   4. GL via subprocess — fallback when Vulkan ICD is missing or
+///      the SPIR-V driver bug is in play.
 fn auto_pick_backend() -> std::result::Result<&'static str, String> {
     if let Ok(forced) = std::env::var("EQUIUM_BACKEND") {
         if !forced.trim().is_empty() {
@@ -212,19 +220,37 @@ fn auto_pick_backend() -> std::result::Result<&'static str, String> {
         }
     }
 
-    // Skip Vulkan up-front if we see a driver that's been known to
-    // crash. The 575 branch ships a SPIR-V compiler that segfaults
-    // on otherwise-valid Naga output; downgrade to 535 LTS is the
-    // real fix but GL works as a stopgap.
+    // Default probe order: vulkan → gl. CUDA inserts at the front
+    // when the feature was compiled in AND nvidia-smi reports a
+    // GPU (so we don't probe CUDA on AMD/Apple hosts that built
+    // with the feature off-handedly).
+    #[allow(unused_mut)]
     let mut probe_order: Vec<&'static str> = vec!["vulkan", "gl"];
+    #[cfg(feature = "cuda")]
+    {
+        if nvidia_driver_version().is_some() {
+            probe_order.insert(0, "cuda");
+        }
+    }
+
+    // On a known-bad SPIR-V driver branch, skip Vulkan entirely.
+    // CUDA still works (different compile path) and GL still works
+    // (different translation), but the Vulkan probe will only
+    // burn 5s before exit-101'ing with "device is lost".
     if let Some(drv) = nvidia_driver_version() {
-        if drv.starts_with("575.") {
+        if drv.starts_with("555.")
+            || drv.starts_with("565.")
+            || drv.starts_with("570.")
+            || drv.starts_with("575.")
+        {
             eprintln!(
-                "⚠ Detected NVIDIA driver {drv} — known SPIR-V crash bug, \
+                "⚠ Detected NVIDIA driver {drv} — known SPIR-V crash branch, \
                  skipping Vulkan probe."
             );
-            eprintln!("  Recommended fix: sudo apt install -y nvidia-driver-535-server && reboot");
-            probe_order = vec!["gl"];
+            probe_order.retain(|b| *b != "vulkan");
+            if probe_order.is_empty() {
+                probe_order.push("gl");
+            }
         }
     }
 
