@@ -101,11 +101,76 @@ export default function DownloadPage() {
 
             <Block label="1 · Pick an instance">
               <P>
-                On vast.ai, filter by "On-demand" + a card you want
-                (RTX 3060 / 4060 / 4070 are sweet spots for $/hashrate
-                — anything ≥6 GB VRAM works). Any "Ubuntu 22.04 + CUDA"
-                base image is fine. Connect via SSH using the command
-                vast.ai prints after rental.
+                Equihash 96,5 is memory-bandwidth bound, not
+                compute-bound. That changes what you want on the
+                marketplace — cheaper mid-range cards usually win on
+                $/hashrate over flagship GPUs because the flagship's
+                extra ALU lanes go mostly unused.
+              </P>
+              <ul className="list-disc pl-6 space-y-2.5 text-[14.5px] leading-[1.65] text-[var(--color-fg-dim)] my-5">
+                <li>
+                  <strong>GPU model.</strong> Sweet spots: RTX 3060
+                  (12 GB or 8 GB), RTX 4060, RTX 3070, RTX 4070. Any
+                  Pascal-or-newer NVIDIA with ≥6 GB VRAM works. RTX
+                  3090 / 4090 / A100 etc. mine fine but you pay 3-5×
+                  the rental rate for ~2× the hashrate — bad
+                  $/hashrate.
+                </li>
+                <li>
+                  <strong>GPU count: 1 is enough.</strong> Our miner
+                  uses one device. Multi-GPU instances waste money.
+                </li>
+                <li>
+                  <strong>VRAM ≥ 6 GB.</strong> The full-GPU pipeline
+                  allocates ~95 MB, so 4 GB cards work, but Vulkan
+                  init reserves more — 6 GB is the safe floor.
+                </li>
+                <li>
+                  <strong>Driver version: avoid 575.x.</strong> The
+                  marketplace card shows the host's NVIDIA driver
+                  (look for "CUDA: 12.x · Driver: 535.x" or similar).
+                  535 / 545 / 550 LTS branches are golden. 575.x has
+                  a SPIR-V compiler crash —{" "}
+                  <Code>cloud-mine.sh</Code> auto-handles it, but
+                  you'll save a reboot by skipping these listings.
+                </li>
+                <li>
+                  <strong>Disk ≥ 10 GB.</strong> The bootstrap
+                  script's pre-flight bails on anything smaller.
+                </li>
+                <li>
+                  <strong>RAM ≥ 4 GB.</strong> Less and cargo will
+                  OOM during the build. Our script auto-adds swap
+                  below 2 GB but it's slow.
+                </li>
+                <li>
+                  <strong>Network: 50 Mbps+.</strong> We barely
+                  transfer anything during mining, but the
+                  one-time repo clone + cargo deps download a few
+                  hundred MB.
+                </li>
+                <li>
+                  <strong>On-demand &gt; interruptible.</strong> Spot
+                  / interruptible instances get killed when the host
+                  needs them, mid-block. Pay the 20-30% premium for
+                  reliability.
+                </li>
+                <li>
+                  <strong>Verified host badge.</strong> vast.ai marks
+                  hosts that pass their hardware checks. Stick to
+                  those — saves hunting for "why is verify failing".
+                </li>
+                <li>
+                  <strong>OS image: Ubuntu 22.04.</strong> Any of the
+                  PyTorch / CUDA / "ML standard" base templates work.
+                  We don't use the Python or PyTorch stack but they
+                  ship the right NVIDIA driver setup.
+                </li>
+              </ul>
+              <P>
+                Once rented, connect via SSH using the command
+                vast.ai prints in the instance dashboard. The very
+                next step is the bootstrap script below.
               </P>
             </Block>
 
