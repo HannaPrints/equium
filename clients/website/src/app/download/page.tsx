@@ -209,7 +209,8 @@ solana-keygen pubkey ~/.config/solana/id.json   # send a bit of SOL here`}</Pre>
 cd equium
 cargo build --release -p equium-gpu-miner
 
-# Quick sanity check — confirms the shader compiles for your driver.
+# Quick sanity check — auto-probes Metal and confirms the shader
+# matches the CPU reference byte-for-byte.
 ./target/release/equium-gpu-miner verify
 
 ./target/release/equium-gpu-miner mine \\
@@ -256,19 +257,21 @@ export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"`}</Pre>
 solana-keygen pubkey ~/.config/solana/id.json`}</Pre>
             </Block>
             <Block label="5 · Build + run the GPU miner">
-              <Pre>{`# Vulkan dev headers — needed for wgpu to find your driver.
+              <Pre>{`# Vulkan loader (wgpu's preferred path on Linux). If it's missing
+# the miner falls back to GL automatically — but Vulkan is faster.
 # Debian / Ubuntu
-sudo apt install -y libvulkan-dev vulkan-tools
+sudo apt install -y libvulkan1 vulkan-tools
 # Arch
-sudo pacman -S vulkan-headers vulkan-tools
+sudo pacman -S vulkan-icd-loader vulkan-tools
 # Fedora
-sudo dnf install -y vulkan-headers vulkan-tools
+sudo dnf install -y vulkan-loader vulkan-tools
 
 git clone https://github.com/HannaPrints/equium.git
 cd equium
 cargo build --release -p equium-gpu-miner
 
-# Sanity check — confirms the shader compiles for your driver.
+# Sanity check. The miner self-probes Vulkan → GL in subprocesses
+# so a buggy driver kills the probe child, not your terminal.
 ./target/release/equium-gpu-miner verify
 
 ./target/release/equium-gpu-miner mine \\
@@ -276,9 +279,9 @@ cargo build --release -p equium-gpu-miner
   --keypair ~/.config/solana/id.json`}</Pre>
               <P>
                 Works on NVIDIA, AMD, and Intel GPUs that support
-                Vulkan 1.1+. If <Code>vulkaninfo</Code> lists your
-                adapter, the miner will pick it up. Once mining works,
-                see{" "}
+                Vulkan 1.1+ (or GL 4.5 as fallback). If{" "}
+                <Code>vulkaninfo</Code> lists your adapter, the miner
+                will pick it up. Once mining works, see{" "}
                 <a href="#advanced" className="text-[var(--color-rose)] hover:underline">
                   Tune your GPU miner
                 </a>
@@ -329,13 +332,14 @@ solana-keygen pubkey ~/.config/solana/id.json    # send SOL here
 
 # WSL2 exposes your Windows GPU via Vulkan (NVIDIA + AMD have full
 # support; Intel works on recent drivers). Install Vulkan dev headers:
-sudo apt install -y libvulkan-dev vulkan-tools
+sudo apt install -y libvulkan1 vulkan-tools
 
 git clone https://github.com/HannaPrints/equium.git
 cd equium
 cargo build --release -p equium-gpu-miner
 
-# Sanity check — confirms the shader compiles for your driver.
+# Sanity check. Auto-probes Vulkan → GL in subprocesses so a buggy
+# driver kills the probe, not your shell.
 ./target/release/equium-gpu-miner verify
 
 ./target/release/equium-gpu-miner mine \\
@@ -366,13 +370,25 @@ cargo build --release -p equium-gpu-miner
 # catches WGSL logic bugs without needing a GPU.
 ./target/release/equium-gpu-miner verify-cpu
 
-# Real on-device test — runs the WGSL shader on your hardware,
-# compares byte-for-byte to the CPU reference.
+# Real on-device test. The miner auto-probes wgpu backends
+# (Vulkan → GL) in subprocesses, so a driver SIGSEGV kills the
+# probe child instead of you. Expected output on a healthy box:
+#
+#   backend: probing vulkan… OK
+#     ↳ NVIDIA GeForce RTX 4090 (Vulkan, wg=128)
+#   GPU backend: NVIDIA GeForce RTX 4090 (Vulkan, wg=128)
+#   leaves: 2048   gpu: 12ms   cpu: 4ms   match: 2048/2048
+#   ✓ GPU output matches CPU reference byte-for-byte.
 ./target/release/equium-gpu-miner verify`}</Pre>
               <P>
-                If <Code>verify</Code> mismatches, open a GitHub issue
-                with the first-mismatch hex output and your GPU / OS —
-                we want to know about every driver case.
+                If <Code>verify</Code> reports a byte mismatch, open a
+                GitHub issue with the first-mismatch hex output and
+                your GPU / OS — we want to know about every driver
+                case. If a backend gets skipped (
+                <Code>FAILED (killed by signal — driver crash)</Code>),
+                the miner moves on automatically; the troubleshooting
+                line points at the underlying fix (usually a driver
+                downgrade).
               </P>
             </Block>
 
