@@ -173,6 +173,17 @@ export default function DownloadPage() {
                 a Helius RPC URL when prompted, done.
               </P>
               <Callout tone="dim">
+                <strong>Survives SSH disconnect by default.</strong>{" "}
+                The miner runs inside a <Code>tmux</Code> session named
+                {" "}<Code>eqm</Code>. Press{" "}
+                <Code>Ctrl-B</Code> then <Code>D</Code> to detach —
+                miner keeps running. Close your laptop, lose Wi-Fi,
+                whatever; reattach later with{" "}
+                <Code>./equium-install.sh</Code> (rerun) or{" "}
+                <Code>tmux attach -t eqm</Code>. Output is also
+                tee'd to <Code>~/.config/equium/mine.log</Code>.
+              </Callout>
+              <Callout tone="dim">
                 <strong>Built to handle the weird cases.</strong>{" "}
                 Backend auto-probe runs in subprocesses so a driver
                 SIGSEGV kills the probe, not your shell. NVIDIA
@@ -181,9 +192,9 @@ export default function DownloadPage() {
                 driver 535 + reboot). Override the backend choice
                 with <Code>EQUIUM_BACKEND=cuda|vulkan|gl</Code> or
                 force the hybrid path with{" "}
-                <Code>EQUIUM_HYBRID=1</Code> if you ever need to.
-                Stuck? Run <Code>./equium-install.sh --doctor</Code>{" "}
-                for a redacted report you can paste in a GitHub issue.
+                <Code>EQUIUM_HYBRID=1</Code>. Stuck? Run{" "}
+                <Code>./equium-install.sh --doctor</Code> for a
+                redacted report you can paste in a GitHub issue.
               </Callout>
               <Callout tone="dim">
                 <strong>Save the wallet before destroying the rental.</strong>{" "}
@@ -257,8 +268,11 @@ cargo build --release -p equium-gpu-miner
               <Pre>{`curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/install.sh \\
   -o ~/equium-install.sh && chmod +x ~/equium-install.sh && ~/equium-install.sh`}</Pre>
               <span className="text-[12px] text-[var(--color-fg-dim)]">
-                Re-runnable — Ctrl-C + rerun resumes mining. Prefer to
-                build by hand? Manual steps below.
+                Detach-safe — launches the miner inside a{" "}
+                <Code>tmux</Code> session, so SSH drops and laptop
+                closes don't kill it. <Code>Ctrl-B</Code> then{" "}
+                <Code>D</Code> to detach. Prefer to build by hand?
+                Manual steps below.
               </span>
             </Callout>
             <Block label="1 · Install build tools">
