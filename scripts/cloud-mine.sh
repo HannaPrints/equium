@@ -348,6 +348,17 @@ apt_install() {
   $SUDO apt-get install -y -qq "$@"
 }
 
+# Make sure PATH picks up rust + solana additions in this shell AND
+# any future ones (write to .bashrc once), so the operator never has
+# to "restart your shell". Defined here because the Vulkan + XDG
+# setup below needs it too.
+ensure_path_line() {
+  local line="$1"
+  local rc="$HOME/.bashrc"
+  [[ -f "$rc" ]] || touch "$rc"
+  grep -qF "$line" "$rc" 2>/dev/null || printf '\n%s\n' "$line" >> "$rc"
+}
+
 if ! command -v git >/dev/null; then apt_install git; fi
 if ! command -v curl >/dev/null; then apt_install curl; fi
 if ! command -v pkg-config >/dev/null; then apt_install pkg-config build-essential libssl-dev; fi
@@ -355,22 +366,30 @@ if ! command -v pkg-config >/dev/null; then apt_install pkg-config build-essenti
 # Vulkan loader — wgpu picks up NVIDIA/AMD/Intel Vulkan ICDs once this
 # is in place. If we can't install it (no apt etc.) the miner's
 # auto-probe falls back to GL.
-if ! command -v vulkaninfo >/dev/null; then
-  spin "Installing Vulkan loader" \
-    $SUDO apt-get install -y -qq libvulkan1 vulkan-tools libvulkan-dev \
+# NVIDIA's Vulkan ICD has a hard dependency on libXext.so.6 even for
+# pure-compute workloads (the loader tries to enumerate display-related
+# extensions before the app picks the headless path). Minimal CUDA
+# container images don't ship the X11 client libs, so without these
+# the ICD fails to load and `verify` reports "no compatible GPU
+# adapter found" despite a healthy NVIDIA driver.
+if ! command -v vulkaninfo >/dev/null || ! ldconfig -p | grep -q libXext.so.6; then
+  spin "Installing Vulkan loader + X11 client libs" \
+    $SUDO apt-get install -y -qq \
+      libvulkan1 vulkan-tools libvulkan-dev \
+      libxext6 libx11-6 libxcb1 libxkbcommon0 \
       || warn "Vulkan install failed — GL fallback will be used."
 fi
 ok "Vulkan present"
 
-# Make sure PATH picks up rust + solana additions in this shell AND
-# any future ones (write to .bashrc once), so the operator never has
-# to "restart your shell".
-ensure_path_line() {
-  local line="$1"
-  local rc="$HOME/.bashrc"
-  [[ -f "$rc" ]] || touch "$rc"
-  grep -qF "$line" "$rc" 2>/dev/null || printf '\n%s\n' "$line" >> "$rc"
-}
+# Vulkan loader checks XDG_RUNTIME_DIR even on headless compute, and
+# headless cloud containers usually don't set it. Pick a safe default
+# now so the miner doesn't spam loader warnings on every probe.
+if [[ -z "${XDG_RUNTIME_DIR:-}" ]]; then
+  export XDG_RUNTIME_DIR="/tmp/runtime-$(id -u)"
+  mkdir -p "$XDG_RUNTIME_DIR"
+  chmod 700 "$XDG_RUNTIME_DIR"
+  ensure_path_line "export XDG_RUNTIME_DIR=\"/tmp/runtime-\$(id -u)\""
+fi
 
 if ! command -v cargo >/dev/null; then
   spin "Installing Rust toolchain" \
