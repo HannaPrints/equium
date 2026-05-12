@@ -28,11 +28,16 @@ use anyhow::{anyhow, Context, Result};
 use bytemuck::{Pod, Zeroable};
 use std::borrow::Cow;
 
+use crate::gpu::{backends_from_env, pick_workgroup_size, pipeline_constants};
+
 pub const LEAF_BYTES: usize = 12;
 pub const N_INIT_LEAVES: u32 = 1 << 17; // 131,072 for Equihash 96,5
 pub const LEAVES_PER_BLAKE2B: u32 = 5;
 
-const WORKGROUP_SIZE: u32 = 64;
+// Default workgroup size — overridden per pipeline via WGSL
+// override constants based on adapter vendor (see
+// `pick_workgroup_size` in gpu.rs). The dispatch math uses
+// `self.wg_size` so this constant is only the WGSL fallback.
 
 // Match rounds.wgsl constants.
 const HASH_WORDS: u32 = 3;
@@ -108,12 +113,16 @@ pub struct GpuWagner {
 
     pub backend: wgpu::Backend,
     pub adapter_name: String,
+    /// Workgroup size baked into every pipeline in this struct. Both
+    /// shaders share the same `override WG_SIZE` constant; the host
+    /// picks one value per adapter and reuses it.
+    wg_size: u32,
 }
 
 impl GpuWagner {
     pub fn new() -> Result<Self> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
+            backends: backends_from_env(),
             ..Default::default()
         });
 
@@ -127,7 +136,8 @@ impl GpuWagner {
 
         let info = adapter.get_info();
         let backend = info.backend;
-        let adapter_name = format!("{} ({:?})", info.name, info.backend);
+        let wg_size = pick_workgroup_size(&info);
+        let adapter_name = format!("{} ({:?}, wg={})", info.name, info.backend, wg_size);
 
         // Only bump what we strictly need. Downlevel_defaults gives a
         // conservative-but-portable baseline (OpenGL ES 3.0 era); we
@@ -195,12 +205,16 @@ impl GpuWagner {
             bind_group_layouts: &[&leaves_bgl],
             push_constant_ranges: &[],
         });
+        let constants = pipeline_constants(wg_size);
         let leaves_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("leaves.pipeline"),
             layout: Some(&leaves_pl),
             module: &leaves_module,
             entry_point: Some("main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                zero_initialize_workgroup_memory: false,
+            },
             cache: None,
         });
 
@@ -287,13 +301,19 @@ impl GpuWagner {
             push_constant_ranges: &[],
         });
 
+        // Capture `constants` by reference so the closure can hand the
+        // same override map to every round-pipeline build.
+        let round_constants = &constants;
         let make_round_pipeline = |entry: &str, label: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some(label),
                 layout: Some(&rounds_pl),
                 module: &rounds_module,
                 entry_point: Some(entry),
-                compilation_options: Default::default(),
+                compilation_options: wgpu::PipelineCompilationOptions {
+                    constants: round_constants,
+                    zero_initialize_workgroup_memory: false,
+                },
                 cache: None,
             })
         };
@@ -448,6 +468,7 @@ impl GpuWagner {
             bg_leaves,
             backend,
             adapter_name,
+            wg_size,
         })
     }
 
@@ -511,7 +532,7 @@ impl GpuWagner {
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, bg, &[]);
-        let workgroups = (n_threads + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+        let workgroups = (n_threads + self.wg_size - 1) / self.wg_size;
         pass.dispatch_workgroups(workgroups, 1, 1);
     }
 
@@ -562,7 +583,7 @@ impl GpuWagner {
             pass.set_pipeline(&self.leaves_pipeline);
             pass.set_bind_group(0, &self.bg_leaves, &[]);
             let n_calls = (N_INIT_LEAVES + LEAVES_PER_BLAKE2B - 1) / LEAVES_PER_BLAKE2B;
-            let workgroups = (n_calls + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let workgroups = (n_calls + self.wg_size - 1) / self.wg_size;
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
         self.queue.submit(Some(enc.finish()));

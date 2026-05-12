@@ -239,7 +239,15 @@ fn read_nonce_word(i: u32) -> u32 {
     }
 }
 
-@compute @workgroup_size(64)
+// Pipeline-overridable workgroup size. Host code picks per GPU vendor:
+//   NVIDIA → 128 (4 warps per group, good occupancy)
+//   AMD    → 64  (one wavefront)
+//   Apple  → 64
+//   Intel  → 32
+//   else   → 64 (current default)
+override WG_SIZE: u32 = 64;
+
+@compute @workgroup_size(WG_SIZE)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     // One invocation == one BLAKE2b call == five 12-byte leaves.
     let call_idx = gid.x;

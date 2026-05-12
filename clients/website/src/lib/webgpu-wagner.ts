@@ -31,7 +31,19 @@
 const N_INIT_LEAVES = 1 << 17; // 131,072
 const LEAF_BYTES = 12;
 const LEAVES_PER_BLAKE2B = 5;
-const WORKGROUP_SIZE = 64;
+
+/** Pick a workgroup size that matches the GPU's warp/wavefront
+ * width. Matches the native miner's `pick_workgroup_size`. */
+function pickWorkgroupSize(
+  info: { vendor?: string; description?: string } | undefined
+): number {
+  const tag = `${info?.vendor ?? ""} ${info?.description ?? ""}`.toLowerCase();
+  if (tag.includes("nvidia")) return 128;
+  if (tag.includes("amd") || tag.includes("radeon")) return 64;
+  if (tag.includes("apple")) return 64;
+  if (tag.includes("intel")) return 32;
+  return 64;
+}
 
 // Row layout constants (mirror rounds.wgsl)
 const HASH_WORDS = 3;
@@ -94,6 +106,10 @@ export class WebGPUWagner {
   private bgInBOutA: GPUBindGroup;
   private bgLeaves: GPUBindGroup;
 
+  /** Workgroup size baked into every pipeline via the
+   * `override WG_SIZE` constant. */
+  private wgSize: number;
+
   readonly info: WebGPUWagnerInfo;
 
   private constructor(
@@ -122,6 +138,7 @@ export class WebGPUWagner {
       inBOutA: GPUBindGroup;
       leaves: GPUBindGroup;
     },
+    wgSize: number,
     info: WebGPUWagnerInfo
   ) {
     this.device = device;
@@ -143,6 +160,7 @@ export class WebGPUWagner {
     this.bgInAOutB = bindGroups.inAOutB;
     this.bgInBOutA = bindGroups.inBOutA;
     this.bgLeaves = bindGroups.leaves;
+    this.wgSize = wgSize;
     this.info = info;
   }
 
@@ -268,10 +286,16 @@ export class WebGPUWagner {
       ],
     });
 
+    // Pick workgroup size per adapter vendor and feed it through both
+    // shaders' `override WG_SIZE`.
+    const adapterInfo = (adapter as unknown as { info?: GPUAdapterInfo }).info;
+    const wgSize = pickWorkgroupSize(adapterInfo);
+    const constants = { WG_SIZE: wgSize };
+
     const leavesPipeline = device.createComputePipeline({
       label: "leaves.pipeline",
       layout: device.createPipelineLayout({ bindGroupLayouts: [leavesBgl] }),
-      compute: { module: leavesModule, entryPoint: "main" },
+      compute: { module: leavesModule, entryPoint: "main", constants },
     });
 
     const roundsLayout = device.createPipelineLayout({
@@ -281,7 +305,7 @@ export class WebGPUWagner {
       device.createComputePipeline({
         label,
         layout: roundsLayout,
-        compute: { module: roundsModule, entryPoint: entry },
+        compute: { module: roundsModule, entryPoint: entry, constants },
       });
     const initRowsPipeline = makeRoundPipeline(
       "init_rows",
@@ -378,8 +402,7 @@ export class WebGPUWagner {
     const bgInAOutB = makeRoundBg(rowsA, rowsB, "rounds.bg.a_to_b");
     const bgInBOutA = makeRoundBg(rowsB, rowsA, "rounds.bg.b_to_a");
 
-    const info = (adapter as unknown as { info?: GPUAdapterInfo }).info;
-    const name = info?.description || info?.vendor || "WebGPU";
+    const name = adapterInfo?.description || adapterInfo?.vendor || "WebGPU";
     const isFallback =
       (adapter as unknown as { isFallbackAdapter?: boolean })
         .isFallbackAdapter === true;
@@ -410,7 +433,8 @@ export class WebGPUWagner {
         inBOutA: bgInBOutA,
         leaves: bgLeaves,
       },
-      { adapterName: name, isFallback }
+      wgSize,
+      { adapterName: `${name} (wg=${wgSize})`, isFallback }
     );
   }
 
@@ -474,7 +498,7 @@ export class WebGPUWagner {
       pass.setPipeline(this.leavesPipeline);
       pass.setBindGroup(0, this.bgLeaves);
       const nCalls = Math.ceil(N_INIT_LEAVES / LEAVES_PER_BLAKE2B);
-      pass.dispatchWorkgroups(Math.ceil(nCalls / WORKGROUP_SIZE), 1, 1);
+      pass.dispatchWorkgroups(Math.ceil(nCalls / this.wgSize), 1, 1);
       pass.end();
       this.device.queue.submit([enc.finish()]);
     }
@@ -488,7 +512,7 @@ export class WebGPUWagner {
       pass.setPipeline(this.initRowsPipeline);
       pass.setBindGroup(0, this.bgInBOutA);
       pass.dispatchWorkgroups(
-        Math.ceil(N_INIT_LEAVES / WORKGROUP_SIZE),
+        Math.ceil(N_INIT_LEAVES / this.wgSize),
         1,
         1
       );
@@ -514,7 +538,7 @@ export class WebGPUWagner {
         pass.setPipeline(this.countPipeline);
         pass.setBindGroup(0, bg);
         pass.dispatchWorkgroups(
-          Math.ceil(nRowsCurrent / WORKGROUP_SIZE),
+          Math.ceil(nRowsCurrent / this.wgSize),
           1,
           1
         );
@@ -525,7 +549,7 @@ export class WebGPUWagner {
         pass.setPipeline(this.pairPipeline);
         pass.setBindGroup(0, bg);
         pass.dispatchWorkgroups(
-          Math.ceil(nRowsCurrent / WORKGROUP_SIZE),
+          Math.ceil(nRowsCurrent / this.wgSize),
           1,
           1
         );
@@ -552,7 +576,7 @@ export class WebGPUWagner {
       pass.setPipeline(this.solutionPipeline);
       pass.setBindGroup(0, this.bgInBOutA);
       pass.dispatchWorkgroups(
-        Math.ceil(nRowsCurrent / WORKGROUP_SIZE),
+        Math.ceil(nRowsCurrent / this.wgSize),
         1,
         1
       );

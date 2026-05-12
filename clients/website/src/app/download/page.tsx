@@ -48,7 +48,12 @@ export default function DownloadPage() {
           </p>
 
           {/* OS picker — each section installs the GPU miner */}
-          <div className="grid grid-cols-3 gap-3 mb-10">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-10">
+            <OsCard
+              label="Rent a GPU"
+              hint="vast.ai / Runpod · easiest"
+              href="#cloud"
+            />
             <OsCard
               label="macOS"
               hint="Metal · Apple Silicon or Intel"
@@ -65,6 +70,93 @@ export default function DownloadPage() {
               href="#windows"
             />
           </div>
+
+          {/* Cloud GPU rental — the easy path */}
+          <Section id="cloud" title="Rent a GPU and mine in 3 steps.">
+            <Callout>
+              <strong>No GPU at home? Rent one for ~$0.20/hr.</strong>{" "}
+              <a
+                href="https://cloud.vast.ai/?ref_id=270998"
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-[var(--color-rose)] hover:underline"
+              >
+                vast.ai
+              </a>{" "}
+              and{" "}
+              <a
+                href="https://runpod.io"
+                target="_blank"
+                rel="noreferrer noopener"
+                className="text-[var(--color-rose)] hover:underline"
+              >
+                Runpod
+              </a>{" "}
+              both rent NVIDIA cards by the hour with one-click Ubuntu
+              + CUDA images. We don't use CUDA directly — the miner
+              talks to the GPU via Vulkan, which NVIDIA's driver
+              supports natively — so any of the standard "PyTorch /
+              CUDA 12" templates work out of the box.
+            </Callout>
+
+            <Block label="1 · Pick an instance">
+              <P>
+                On vast.ai, filter by "On-demand" + a card you want
+                (RTX 3060 / 4060 / 4070 are sweet spots for $/hashrate
+                — anything ≥6 GB VRAM works). Any "Ubuntu 22.04 + CUDA"
+                base image is fine. Connect via SSH using the command
+                vast.ai prints after rental.
+              </P>
+            </Block>
+
+            <Block label="2 · Run the bootstrap script">
+              <Pre>{`curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/cloud-mine.sh -o cloud-mine.sh
+chmod +x cloud-mine.sh
+./cloud-mine.sh`}</Pre>
+              <P>
+                The script installs Rust, the Vulkan loader, and the
+                Solana CLI if they're missing, clones the repo, builds{" "}
+                <Code>equium-gpu-miner</Code>, generates a mining
+                keypair, and runs <Code>verify</Code> so you can see
+                your rented GPU is detected. Then it prints a Solana
+                address and waits.
+              </P>
+            </Block>
+
+            <Block label="3 · Fund + mine">
+              <P>
+                Send ~0.01 SOL to the printed address for tx fees, and
+                paste a Helius RPC URL when prompted. The script polls
+                the balance until the funds land, then execs the miner.
+                That's it.
+              </P>
+              <Callout tone="dim">
+                <strong>Known issue: NVIDIA driver 575.x.</strong>{" "}
+                That branch ships a SPIR-V compiler bug that segfaults
+                during pipeline creation. If <Code>verify</Code> crashes
+                in <Code>libnvidia-glvkspirv.so</Code>, either downgrade
+                to the 535 LTS driver (
+                <Code>
+                  sudo apt install -y nvidia-driver-535-server &amp;&amp; sudo reboot
+                </Code>
+                ), or run with the GL backend as a fallback:{" "}
+                <Code>EQUIUM_BACKEND=gl ./target/release/equium-gpu-miner mine …</Code>
+                . The bootstrap script auto-warns on detection.
+              </Callout>
+              <Callout tone="dim">
+                <strong>Keep the keypair if you want to keep mining.</strong>{" "}
+                vast.ai instances are ephemeral — when you stop the
+                rental, the box goes away. Copy{" "}
+                <Code>~/.config/solana/id.json</Code> off the box
+                before destroying the instance, or your mined EQM stays
+                tied to a key only that instance held. The{" "}
+                <Link href="/mine" className="text-[var(--color-rose)] hover:underline">
+                  browser miner
+                </Link>{" "}
+                gives you the same wallet on any device for free, FYI.
+              </Callout>
+            </Block>
+          </Section>
 
           {/* Common prerequisites */}
           <section className="mb-12">

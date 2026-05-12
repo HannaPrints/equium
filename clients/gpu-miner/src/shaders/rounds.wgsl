@@ -63,10 +63,14 @@ fn extract_bucket(row: u32) -> u32 {
     return (b0 << 8u) | b1;
 }
 
+// Pipeline-overridable workgroup size. Host picks per vendor (NVIDIA
+// 128, AMD 64, Apple 64, Intel 32) to match warp/wavefront width.
+override WG_SIZE: u32 = 64;
+
 // Expand GPU-side leaves (3 u32 per leaf) into row-format rows_out:
 // each row gets the 3 hash words + its leaf index as indices[0]. Run
 // once after the leaves kernel and before round 0's count_buckets.
-@compute @workgroup_size(64)
+@compute @workgroup_size(WG_SIZE)
 fn init_rows(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if (i >= params.n_rows) { return; }
@@ -81,7 +85,7 @@ fn init_rows(@builtin(global_invocation_id) gid: vec3<u32>) {
 // Surviving rows after the final Wagner round whose hash is all-zero
 // are candidate solutions. Each one's 32-index list is copied into
 // rows_out at a freshly-allocated solution slot (atomic on out_count).
-@compute @workgroup_size(64)
+@compute @workgroup_size(WG_SIZE)
 fn solution_scan(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if (i >= params.n_rows) { return; }
@@ -103,7 +107,7 @@ fn solution_scan(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(WG_SIZE)
 fn count_buckets(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if (i >= params.n_rows) { return; }
@@ -130,7 +134,7 @@ fn distinct_indices(a: u32, b: u32) -> bool {
     return true;
 }
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(WG_SIZE)
 fn pair_emit(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     if (i >= params.n_rows) { return; }

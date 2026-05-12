@@ -18,9 +18,73 @@ pub const LEAF_BYTES: usize = 12;
 /// 60-byte BLAKE2b output → 5 leaves per call.
 pub const LEAVES_PER_CALL: u32 = 5;
 
-/// Workgroup size declared in the WGSL kernel. Used to compute the
-/// dispatch grid.
-const WORKGROUP_SIZE: u32 = 64;
+/// Pick a workgroup size that fits the adapter's warp/wavefront
+/// width. NVIDIA's warp is 32 (4 fit in a 128-lane group); AMD's
+/// wavefront is 64; Apple/Intel sit at 32. The chosen value is
+/// passed to the shader as a pipeline-overridable constant
+/// (`override WG_SIZE: u32`) so we don't have to recompile or ship
+/// multiple WGSL variants.
+///
+/// Mining hashrate is roughly memory-bandwidth bound, so the
+/// workgroup size only nudges things by a few percent — but it's a
+/// free win and gives sensible defaults across vendors.
+pub fn pick_workgroup_size(info: &wgpu::AdapterInfo) -> u32 {
+    // PCI vendor IDs from https://pcisig.com/membership/member-companies
+    // (matches what wgpu surfaces in `AdapterInfo::vendor`).
+    const VENDOR_NVIDIA: u32 = 0x10de;
+    const VENDOR_AMD: u32 = 0x1002;
+    const VENDOR_APPLE: u32 = 0x106b;
+    const VENDOR_INTEL: u32 = 0x8086;
+    match info.vendor {
+        VENDOR_NVIDIA => 128,
+        VENDOR_AMD => 64,
+        VENDOR_APPLE => 64,
+        VENDOR_INTEL => 32,
+        _ => 64,
+    }
+}
+
+/// Build the `constants` map for pipeline compilation. Currently
+/// just holds `WG_SIZE`; collected here so both pipeline-creators
+/// stay in sync.
+pub fn pipeline_constants(wg_size: u32) -> std::collections::HashMap<String, f64> {
+    let mut m = std::collections::HashMap::new();
+    m.insert("WG_SIZE".to_string(), wg_size as f64);
+    m
+}
+
+/// Pick wgpu backends honoring `EQUIUM_BACKEND`:
+///
+///   primary | (unset)  → VULKAN | METAL | DX12 (default)
+///   gl                 → GL only (escape hatch when Vulkan crashes)
+///   vulkan             → VULKAN only
+///   all                → PRIMARY | SECONDARY
+///
+/// Why this exists: some NVIDIA driver releases (notably 575.x) ship
+/// a SPIR-V compiler in libnvidia-glvkspirv.so that segfaults on
+/// otherwise-valid Naga output during pipeline creation. The GL path
+/// uses a different translation backend and dodges the bug — at the
+/// cost of slower throughput, since GL doesn't expose every compute
+/// feature we'd otherwise use. Downgrading to NVIDIA driver 535 LTS
+/// is the recommended fix; `EQUIUM_BACKEND=gl` is the workaround.
+pub fn backends_from_env() -> wgpu::Backends {
+    match std::env::var("EQUIUM_BACKEND")
+        .unwrap_or_default()
+        .to_lowercase()
+        .as_str()
+    {
+        "gl" | "opengl" => wgpu::Backends::GL,
+        "vulkan" => wgpu::Backends::VULKAN,
+        "metal" => wgpu::Backends::METAL,
+        "dx12" => wgpu::Backends::DX12,
+        "all" => wgpu::Backends::all(),
+        "" | "primary" | "auto" => wgpu::Backends::PRIMARY,
+        s => {
+            eprintln!("EQUIUM_BACKEND='{s}' unrecognized — using PRIMARY");
+            wgpu::Backends::PRIMARY
+        }
+    }
+}
 
 /// Uniform block matching the shader's `Params` struct.
 ///
@@ -49,12 +113,15 @@ pub struct GpuLeafGen {
     bind_group_layout: wgpu::BindGroupLayout,
     pub backend: wgpu::Backend,
     pub adapter_name: String,
+    /// Workgroup size baked into the compiled pipeline. Used to size
+    /// dispatch grids — `workgroups = ceil(threads / wg_size)`.
+    wg_size: u32,
 }
 
 impl GpuLeafGen {
     pub fn new() -> Result<Self> {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::PRIMARY,
+            backends: backends_from_env(),
             ..Default::default()
         });
 
@@ -67,7 +134,8 @@ impl GpuLeafGen {
 
         let info = adapter.get_info();
         let backend = info.backend;
-        let adapter_name = format!("{} ({:?})", info.name, info.backend);
+        let wg_size = pick_workgroup_size(&info);
+        let adapter_name = format!("{} ({:?}, wg={})", info.name, info.backend, wg_size);
 
         let (device, queue) = pollster::block_on(adapter.request_device(
             &wgpu::DeviceDescriptor {
@@ -117,12 +185,16 @@ impl GpuLeafGen {
             push_constant_ranges: &[],
         });
 
+        let constants = pipeline_constants(wg_size);
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("leaves.pipeline"),
             layout: Some(&pipeline_layout),
             module: &module,
             entry_point: Some("main"),
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &constants,
+                zero_initialize_workgroup_memory: false,
+            },
             cache: None,
         });
 
@@ -133,6 +205,7 @@ impl GpuLeafGen {
             bind_group_layout,
             backend,
             adapter_name,
+            wg_size,
         })
     }
 
@@ -232,7 +305,7 @@ impl GpuLeafGen {
             pass.set_bind_group(0, &bind_group, &[]);
             // One invocation per BLAKE2b call (= 5 leaves).
             let n_calls = (n_leaves + LEAVES_PER_CALL - 1) / LEAVES_PER_CALL;
-            let workgroups = (n_calls + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
+            let workgroups = (n_calls + self.wg_size - 1) / self.wg_size;
             pass.dispatch_workgroups(workgroups, 1, 1);
         }
         encoder.copy_buffer_to_buffer(&storage_buf, 0, &staging, 0, storage_bytes);

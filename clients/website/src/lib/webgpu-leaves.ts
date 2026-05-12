@@ -19,7 +19,20 @@
 const N_INIT_LEAVES = 1 << 17; // 131,072 for Equihash 96,5
 const LEAF_BYTES = 12;
 const LEAVES_PER_BLAKE2B = 5; // 60-byte digest → 5 leaves
-const WORKGROUP_SIZE = 64;
+
+/** Pick a workgroup size that matches the GPU's warp/wavefront
+ * width. Same heuristic as the native miner (clients/gpu-miner/
+ * src/gpu.rs::pick_workgroup_size). */
+function pickWorkgroupSize(
+  info: { vendor?: string; description?: string } | undefined
+): number {
+  const tag = `${info?.vendor ?? ""} ${info?.description ?? ""}`.toLowerCase();
+  if (tag.includes("nvidia")) return 128;
+  if (tag.includes("amd") || tag.includes("radeon")) return 64;
+  if (tag.includes("apple")) return 64;
+  if (tag.includes("intel")) return 32;
+  return 64;
+}
 
 /**
  * Uniform layout mirrors gpu.rs::Params exactly (160 bytes, all
@@ -65,6 +78,9 @@ export class WebGPULeaves {
   private leavesBuf: GPUBuffer;
   private stagingBuf: GPUBuffer;
   private bindGroup: GPUBindGroup;
+  /** Workgroup size baked into the compiled pipeline via the
+   * `override WG_SIZE` constant. Used to compute dispatch grid. */
+  private wgSize: number;
   readonly info: WebGPULeavesInfo;
 
   private constructor(
@@ -74,6 +90,7 @@ export class WebGPULeaves {
     leavesBuf: GPUBuffer,
     stagingBuf: GPUBuffer,
     bindGroup: GPUBindGroup,
+    wgSize: number,
     info: WebGPULeavesInfo
   ) {
     this.device = device;
@@ -82,6 +99,7 @@ export class WebGPULeaves {
     this.leavesBuf = leavesBuf;
     this.stagingBuf = stagingBuf;
     this.bindGroup = bindGroup;
+    this.wgSize = wgSize;
     this.info = info;
   }
 
@@ -142,12 +160,21 @@ export class WebGPULeaves {
       ],
     });
 
+    // Pick workgroup size from adapter info before pipeline create —
+    // override constants are resolved at compile time.
+    const adapterInfo = (adapter as unknown as { info?: GPUAdapterInfo }).info;
+    const wgSize = pickWorkgroupSize(adapterInfo);
+
     const pipeline = device.createComputePipeline({
       label: "leaves.pipeline",
       layout: device.createPipelineLayout({
         bindGroupLayouts: [bindGroupLayout],
       }),
-      compute: { module, entryPoint: "main" },
+      compute: {
+        module,
+        entryPoint: "main",
+        constants: { WG_SIZE: wgSize },
+      },
     });
 
     const paramsBuf = device.createBuffer({
@@ -178,8 +205,7 @@ export class WebGPULeaves {
 
     // Browsers tend to mask adapter.info for fingerprinting reasons; we
     // surface what's available and otherwise label it generically.
-    const info = (adapter as unknown as { info?: GPUAdapterInfo }).info;
-    const name = info?.description || info?.vendor || "WebGPU";
+    const name = adapterInfo?.description || adapterInfo?.vendor || "WebGPU";
     const isFallback =
       (adapter as unknown as { isFallbackAdapter?: boolean })
         .isFallbackAdapter === true;
@@ -191,7 +217,8 @@ export class WebGPULeaves {
       leavesBuf,
       stagingBuf,
       bindGroup,
-      { adapterName: name, isFallback }
+      wgSize,
+      { adapterName: `${name} (wg=${wgSize})`, isFallback }
     );
   }
 
@@ -231,7 +258,7 @@ export class WebGPULeaves {
       pass.setPipeline(this.pipeline);
       pass.setBindGroup(0, this.bindGroup);
       const nCalls = Math.ceil(N_INIT_LEAVES / LEAVES_PER_BLAKE2B);
-      const workgroups = Math.ceil(nCalls / WORKGROUP_SIZE);
+      const workgroups = Math.ceil(nCalls / this.wgSize);
       pass.dispatchWorkgroups(workgroups, 1, 1);
       pass.end();
     }
