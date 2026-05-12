@@ -20,31 +20,21 @@ export default function DownloadPage() {
           <h1 className="text-[40px] md:text-[52px] font-black tracking-[-0.025em] leading-[1.05] mb-5">
             Mine $EQM with your GPU.
           </h1>
-          <p className="text-[17px] leading-[1.6] text-[var(--color-fg-dim)] max-w-2xl mb-4">
-            The GPU miner is the fastest path to earning EQM. Single
-            Rust binary, no Electron, no installer popups, no CUDA, no
-            proprietary driver — cross-platform via{" "}
-            <Code>wgpu</Code> (Metal on macOS, Vulkan on Linux/Windows,
-            DX12 on Windows). Any modern GPU works.
-          </p>
-          <p className="text-[15px] leading-[1.6] text-[var(--color-fg-dim)] max-w-2xl mb-4">
-            No GPU? The{" "}
-            <a href="#cpu" className="text-[var(--color-rose)] hover:underline">
-              CPU fallback
-            </a>{" "}
-            still earns blocks — Equihash is memory-bound so commodity
-            hardware stays competitive — but if you have a GPU, use it.
-          </p>
-          <p className="text-[15px] leading-[1.6] text-[var(--color-fg-dim)] max-w-2xl mb-10">
-            Just want to try mining without installing anything? Use the{" "}
+          <p className="text-[17px] leading-[1.6] text-[var(--color-fg-dim)] max-w-2xl mb-3">
+            Single Rust binary. No CUDA, no Electron, no proprietary
+            driver — cross-platform via <Code>wgpu</Code>. Any modern
+            GPU works; CPU and{" "}
             <Link
               href="/mine"
-              className="text-[var(--color-rose)] font-semibold hover:underline"
+              className="text-[var(--color-rose)] hover:underline"
             >
-              browser miner
-            </Link>
-            . Same protocol, slower because of WASM overhead, but zero
-            setup.
+              browser
+            </Link>{" "}
+            fallbacks ship too.
+          </p>
+          <p className="text-[14px] leading-[1.6] text-[var(--color-fg-faint)] max-w-2xl mb-10">
+            Renting a GPU is the easiest path — start there if you
+            don't already have one.
           </p>
 
           {/* OS picker — each section installs the GPU miner */}
@@ -101,77 +91,58 @@ export default function DownloadPage() {
 
             <Block label="1 · Pick an instance">
               <P>
-                Equihash 96,5 is memory-bandwidth bound, not
-                compute-bound. That changes what you want on the
-                marketplace — cheaper mid-range cards usually win on
-                $/hashrate over flagship GPUs because the flagship's
-                extra ALU lanes go mostly unused.
+                We haven't benchmarked specific cards yet — these are
+                starting recommendations based on Equihash 96,5 being
+                memory-bandwidth bound. Mid-range NVIDIAs are usually
+                better $/hashrate than flagships.
               </P>
-              <ul className="list-disc pl-6 space-y-2.5 text-[14.5px] leading-[1.65] text-[var(--color-fg-dim)] my-5">
+
+              {/* CTA: opens vast.ai with a sensible pre-filter */}
+              <div className="my-5">
+                <a
+                  href="https://cloud.vast.ai/?ref_id=270998&search_query=verified%3Dtrue%20rentable%3Dtrue%20num_gpus%3D1%20gpu_ram%3E%3D6%20cuda_max_good%3E%3D12"
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-[var(--color-rose)] text-[var(--color-bg)] font-bold text-[14px] hover:bg-[var(--color-rose-bright)] transition-colors"
+                >
+                  Open vast.ai with our filters
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <path d="M7 17 17 7" />
+                    <path d="M7 7h10v10" />
+                  </svg>
+                </a>
+                <span className="ml-3 text-[12px] font-mono text-[var(--color-fg-dim)]">
+                  verified · 1 GPU · ≥6 GB VRAM · CUDA ≥12
+                </span>
+              </div>
+
+              <ul className="list-disc pl-6 space-y-1.5 text-[14px] leading-[1.6] text-[var(--color-fg-dim)] my-4">
                 <li>
-                  <strong>GPU model.</strong> Sweet spots: RTX 3060
-                  (12 GB or 8 GB), RTX 4060, RTX 3070, RTX 4070. Any
-                  Pascal-or-newer NVIDIA with ≥6 GB VRAM works. RTX
-                  3090 / 4090 / A100 etc. mine fine but you pay 3-5×
-                  the rental rate for ~2× the hashrate — bad
-                  $/hashrate.
+                  <strong>Start mid-range.</strong> RTX 30/40-series
+                  6-12 GB cards (3060, 4060, 3070, 4070) often beat
+                  flagships on $/hashrate — flagship ALUs don't help a
+                  memory-bound workload. Report your numbers and we'll
+                  publish a real comparison.
                 </li>
                 <li>
-                  <strong>GPU count: 1 is enough.</strong> Our miner
-                  uses one device. Multi-GPU instances waste money.
+                  <strong>One GPU is plenty.</strong> The miner uses a
+                  single device.
                 </li>
                 <li>
-                  <strong>VRAM ≥ 6 GB.</strong> The full-GPU pipeline
-                  allocates ~95 MB, so 4 GB cards work, but Vulkan
-                  init reserves more — 6 GB is the safe floor.
+                  <strong>On-demand, not interruptible.</strong> Spot
+                  instances get killed mid-block.
                 </li>
                 <li>
-                  <strong>Driver version: avoid 575.x.</strong> The
-                  marketplace card shows the host's NVIDIA driver
-                  (look for "CUDA: 12.x · Driver: 535.x" or similar).
-                  535 / 545 / 550 LTS branches are golden. 575.x has
-                  a SPIR-V compiler crash —{" "}
-                  <Code>cloud-mine.sh</Code> auto-handles it, but
-                  you'll save a reboot by skipping these listings.
+                  <strong>Verified host + Ubuntu 22.04 PyTorch/CUDA
+                  template.</strong> Saves driver-debugging time.
                 </li>
                 <li>
-                  <strong>Disk ≥ 10 GB.</strong> The bootstrap
-                  script's pre-flight bails on anything smaller.
-                </li>
-                <li>
-                  <strong>RAM ≥ 4 GB.</strong> Less and cargo will
-                  OOM during the build. Our script auto-adds swap
-                  below 2 GB but it's slow.
-                </li>
-                <li>
-                  <strong>Network: 50 Mbps+.</strong> We barely
-                  transfer anything during mining, but the
-                  one-time repo clone + cargo deps download a few
-                  hundred MB.
-                </li>
-                <li>
-                  <strong>On-demand &gt; interruptible.</strong> Spot
-                  / interruptible instances get killed when the host
-                  needs them, mid-block. Pay the 20-30% premium for
-                  reliability.
-                </li>
-                <li>
-                  <strong>Verified host badge.</strong> vast.ai marks
-                  hosts that pass their hardware checks. Stick to
-                  those — saves hunting for "why is verify failing".
-                </li>
-                <li>
-                  <strong>OS image: Ubuntu 22.04.</strong> Any of the
-                  PyTorch / CUDA / "ML standard" base templates work.
-                  We don't use the Python or PyTorch stack but they
-                  ship the right NVIDIA driver setup.
+                  <strong>Driver 535 / 545 / 550 LTS.</strong> 575.x
+                  has a SPIR-V crash that <Code>cloud-mine.sh</Code>{" "}
+                  auto-handles, but skipping those listings saves a
+                  reboot.
                 </li>
               </ul>
-              <P>
-                Once rented, connect via SSH using the command
-                vast.ai prints in the instance dashboard. The very
-                next step is the bootstrap script below.
-              </P>
             </Block>
 
             <Block label="2 · Run the bootstrap script">
@@ -427,138 +398,62 @@ cargo build --release -p equium-gpu-miner
           </Section>
 
           {/* Tune your GPU miner */}
-          <Section id="advanced" title="Tune your GPU miner">
-            <P>
-              Once <Code>mine</Code> is running, the commands below let
-              you verify the shader on your specific driver, benchmark
-              throughput, and opt into the v0.2 all-on-GPU pipeline.
-            </P>
-
-            <Block label="Verify the shader is correct for your driver">
-              <Pre>{`# Pure-Rust port checked against blake2b_simd — always passes,
-# catches WGSL logic bugs without needing a GPU.
-./target/release/equium-gpu-miner verify-cpu
-
-# Real on-device test. The miner auto-probes wgpu backends
-# (Vulkan → GL) in subprocesses, so a driver SIGSEGV kills the
-# probe child instead of you. Expected output on a healthy box:
-#
-#   backend: probing vulkan… OK
-#     ↳ NVIDIA GeForce RTX 4090 (Vulkan, wg=128)
-#   GPU backend: NVIDIA GeForce RTX 4090 (Vulkan, wg=128)
-#   leaves: 2048   gpu: 12ms   cpu: 4ms   match: 2048/2048
-#   ✓ GPU output matches CPU reference byte-for-byte.
-./target/release/equium-gpu-miner verify`}</Pre>
+          <Section id="advanced" title="Tune & verify">
+            <Block label="Sanity-check your driver">
+              <Pre>{`./target/release/equium-gpu-miner verify`}</Pre>
               <P>
-                If <Code>verify</Code> reports a byte mismatch, open a
-                GitHub issue with the first-mismatch hex output and
-                your GPU / OS — we want to know about every driver
-                case. If a backend gets skipped (
-                <Code>FAILED (killed by signal — driver crash)</Code>),
-                the miner moves on automatically; the troubleshooting
-                line points at the underlying fix (usually a driver
-                downgrade).
-              </P>
-            </Block>
-
-            <Block label="Benchmark throughput">
-              <Pre>{`./target/release/equium-gpu-miner bench`}</Pre>
-              <P>
-                Reports BLAKE2b throughput at full Equihash 96,5 width.
-                Useful for confirming a real adapter was picked up, not
-                a software fallback.
+                Auto-probes Vulkan → GL in subprocesses (so a driver
+                SIGSEGV kills only the probe child), then compares
+                the WGSL leaves output against the CPU reference. A
+                healthy box prints{" "}
+                <Code>✓ GPU output matches CPU reference byte-for-byte</Code>.
               </P>
             </Block>
 
             <Block label="Full-GPU mode (v0.2, opt-in)">
-              <Pre>{`# Sanity-check first — runs the GPU Wagner pipeline alongside
-# the CPU reference on the same nonces and asserts they agree.
-./target/release/equium-gpu-miner verify-rounds --nonces 4
-
-# Then mine with everything on GPU.
+              <Pre>{`./target/release/equium-gpu-miner verify-rounds --nonces 4
 ./target/release/equium-gpu-miner mine --full-gpu \\
   --rpc-url https://mainnet.helius-rpc.com/?api-key=YOUR_KEY \\
   --keypair ~/.config/solana/id.json`}</Pre>
               <P>
-                v0.2 moves the full Wagner solver onto the GPU — all
-                five rounds plus solution scan run on-device, with
-                only tx submission left on CPU. The algorithm is
-                byte-for-byte validated against the CPU solver at all
-                5 rounds (see <Code>cargo test</Code> in{" "}
-                <Code>clients/gpu-miner</Code>); the on-device
-                verification step above checks your specific
-                driver/adapter before you commit.
+                Moves all five Wagner rounds + the solution scan onto
+                the GPU. The algorithm is byte-for-byte validated
+                against the CPU reference at every round;{" "}
+                <Code>verify-rounds</Code> repeats that check on your
+                specific driver before you commit.
               </P>
             </Block>
 
             <Callout tone="dim">
-              v0.1 hybrid (GPU leaves + CPU Wagner) is the default and
-              battle-tested. v0.2 full-GPU is shipping for early
-              testers — run <Code>verify-rounds</Code> and report any
-              disagreement before relying on it. v0.3 + v0.4 bring
-              the same WGSL kernels to the browser miner via WebGPU,
-              with an automatic three-tier fallback (Full-GPU →
-              Hybrid → CPU) per browser capability.{" "}
+              <Code>bench</Code> prints BLAKE2b throughput at full
+              width if you want a number. Full source + roadmap at{" "}
               <a
                 href="https://github.com/HannaPrints/equium/tree/master/clients/gpu-miner"
                 className="text-[var(--color-rose)] hover:underline"
                 target="_blank"
                 rel="noreferrer noopener"
               >
-                Source + roadmap
+                clients/gpu-miner
               </a>
               .
             </Callout>
           </Section>
 
           {/* CPU fallback */}
-          <Section id="cpu" title="No GPU? CPU still earns blocks.">
+          <Section id="cpu" title="No GPU? CPU still earns.">
             <P>
-              Equihash 96,5 is memory-bound, so the protocol stays
-              ASIC-resistant and commodity CPUs stay viable miners.
-              The auto-retargeter scales difficulty with total
-              hashrate, so a pure-CPU miner keeps winning a share of
-              blocks — your share just tracks your share of total
-              network hashrate, like any PoW chain.
+              Equihash 96,5 is memory-bound, so commodity CPUs stay
+              viable — auto-retargeting tracks total network hashrate,
+              and your share scales with yours.
             </P>
             <Block label="Build + run the CPU miner">
-              <Pre>{`# Prereqs (Rust + Solana CLI + keypair) from the section above.
-cd equium
+              <Pre>{`cd equium
 cargo build --release -p equium-cli-miner
-
 ./target/release/equium-miner \\
   --rpc-url https://mainnet.helius-rpc.com/?api-key=YOUR_KEY \\
   --keypair ~/.config/solana/id.json \\
   --threads $(nproc 2>/dev/null || sysctl -n hw.physicalcpu)`}</Pre>
             </Block>
-            <P>
-              One solver thread per physical core by default. Override
-              with <Code>--threads N</Code> if you want to leave some
-              cores free for other work. Each thread independently
-              grinds nonces; first to find a below-target solution
-              wins the round.
-            </P>
-          </Section>
-
-          {/* Performance notes */}
-          <Section id="perf" title="Performance notes">
-            <P>
-              The auto-retargeter brings difficulty up as more miners join
-              the network. Expect your hashrate, in absolute terms, to look
-              fine while your share of blocks shrinks — that's the network
-              working as designed.
-            </P>
-            <P>
-              <strong>Why GPU first.</strong> v0.1 of the GPU miner
-              moves BLAKE2b leaf generation (~70% of solver time) onto
-              the GPU; v0.2 moves the rest of Wagner. Both versions
-              share one Rust core and one set of WGSL shaders running
-              across Metal, Vulkan, and DX12 — no CUDA, no driver
-              install, no admin rights. The on-chain protocol is
-              committed to (96, 5) forever, so every accelerated
-              implementation we ship is open-source on the same terms
-              as the protocol itself.
-            </P>
           </Section>
 
           <div className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-bg-elev)] p-5 md:p-6 mt-12">
