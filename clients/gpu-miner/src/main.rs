@@ -1041,9 +1041,41 @@ fn compress_indices_96_5(indices: &[u32; 32]) -> Vec<u8> {
 // ============================================================================
 
 fn fetch_config(rpc: &RpcClient, config_pda: &Pubkey) -> Result<EquiumConfig> {
-    let acct = rpc.get_account(config_pda)?;
+    let acct = rpc.get_account(config_pda).map_err(|e| {
+        anyhow::anyhow!(
+            "Could not fetch program config account {}\n\
+             Caused by: {}\n\
+             \n\
+             This usually means one of:\n\
+             1. Wrong --rpc-url: make sure you are pointing at Solana mainnet-beta\n\
+             2. Wrong program ID: the miner binary was built against a different deployment\n\
+             3. Program not yet deployed: check https://equium.xyz for the current status\n\
+             4. RPC node is lagging: try a different RPC endpoint (e.g. https://helius.dev)",
+            config_pda, e
+        )
+    })?;
+
+    if acct.data.is_empty() {
+        anyhow::bail!(
+            "Program config account {} exists but has no data.\n\
+             The Equium program may not be fully initialized yet.\n\
+             Check https://equium.xyz or the #mining channel for status.",
+            config_pda
+        );
+    }
+
     let mut data = acct.data.as_slice();
-    let cfg = EquiumConfig::try_deserialize(&mut data)?;
+    let cfg = EquiumConfig::try_deserialize(&mut data).map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to deserialize program config at {}\n\
+             Caused by: {}\n\
+             \n\
+             This usually means the on-chain program was redeployed with a new\n\
+             account layout. Update your miner binary:\n\
+             git pull && cargo build --release -p equium-cli-miner",
+            config_pda, e
+        )
+    })?;
     Ok(cfg)
 }
 
