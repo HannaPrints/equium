@@ -652,6 +652,15 @@ if [[ -n "${EQUIUM_THREADS:-}" ]]; then
   mine_args+=(--threads "$EQUIUM_THREADS")
 fi
 
+# Default to --full-gpu on CUDA boxes — the CUDA Wagner kernels are
+# the whole reason we built this backend, and the hybrid path tops
+# out at ~15 H/s. Force the hybrid fallback with EQUIUM_HYBRID=1
+# (escape hatch in case the full-GPU kernels misbehave on a
+# specific card).
+if [[ $USE_CUDA -eq 1 ]] && [[ -z "${EQUIUM_HYBRID:-}" ]]; then
+  mine_args+=(--full-gpu)
+fi
+
 hr
 printf "${C_BOLD}Mining EQM on $PUBKEY${C_RESET}\n"
 printf "${C_DIM}Press Ctrl-C to stop. Rerun ./cloud-mine.sh to resume — RPC + keypair are saved.${C_RESET}\n"
