@@ -243,14 +243,27 @@ fn auto_pick_backend() -> std::result::Result<&'static str, String> {
         }
     }
 
+    // If we saw "device is lost" anywhere, that's the unmistakable
+    // signature of the NVIDIA 555/565/570/575 SPIR-V driver bug.
+    // Tailor the message so the operator knows it's a driver issue,
+    // not a config one.
+    let device_lost = errors
+        .iter()
+        .any(|e| e.to_lowercase().contains("device is lost"));
+    let driver_hint = if device_lost {
+        "\n  ⚠ \"device is lost\" = NVIDIA SPIR-V driver bug (555.x / 565.x /\n     570.x / 575.x branches). Permanent fix: install the LTS\n     driver: sudo apt install -y nvidia-driver-535-server.\n     Inside a container (vast.ai / Runpod) you can't replace the\n     kernel module — stop the rental and pick another listing\n     with driver 535.x / 545.x / 550.x instead.\n"
+    } else {
+        ""
+    };
+
     Err(format!(
-        "No working GPU backend.\n\nProbes:\n  - {}\n\nTroubleshooting:\n  \
+        "No working GPU backend.\n\nProbes:\n  - {}\n{}\nTroubleshooting:\n  \
         1. nvidia-smi              (driver present + healthy?)\n  \
         2. vulkaninfo --summary    (Vulkan loader sees the GPU?)\n  \
         3. lspci | grep -i vga     (kernel sees the card?)\n  \
-        4. On NVIDIA 575.x: sudo apt install -y nvidia-driver-535-server\n  \
-        5. File an issue: https://github.com/HannaPrints/equium/issues\n",
-        errors.join("\n  - ")
+        4. File an issue: https://github.com/HannaPrints/equium/issues\n",
+        errors.join("\n  - "),
+        driver_hint,
     ))
 }
 
@@ -276,12 +289,44 @@ fn probe_subprocess(backend: &str) -> std::result::Result<String, String> {
     if out.status.success() {
         let name = String::from_utf8_lossy(&out.stderr).trim().to_string();
         Ok(if name.is_empty() { backend.to_string() } else { name })
-    } else if let Some(code) = out.status.code() {
-        Err(format!("exit {code}"))
     } else {
-        // No exit code → killed by a signal. On *nix the most common
-        // signal that hits us here is SIGSEGV from the driver.
-        Err("killed by signal (likely SIGSEGV — driver crash)".to_string())
+        // Surface the child's stderr — that's where wgpu's panic
+        // message lives. Pluck the most signal-rich lines (panicked /
+        // Error: / VK_ERROR) and fall back to the tail if none match.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let interesting: Vec<&str> = stderr
+            .lines()
+            .filter(|l| {
+                let lo = l.to_lowercase();
+                lo.contains("panic")
+                    || lo.contains("error")
+                    || lo.contains("vk_error")
+                    || lo.starts_with("caused by")
+            })
+            .take(3)
+            .collect();
+        let summary = if !interesting.is_empty() {
+            interesting.join(" · ")
+        } else {
+            stderr
+                .lines()
+                .rev()
+                .filter(|l| !l.trim().is_empty())
+                .take(2)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join(" · ")
+        };
+        let summary = summary.chars().take(220).collect::<String>();
+        if let Some(code) = out.status.code() {
+            Err(format!("exit {code} — {summary}"))
+        } else {
+            // No exit code → killed by a signal. On *nix the most common
+            // signal that hits us here is SIGSEGV from the driver.
+            Err(format!("killed by signal (likely SIGSEGV — driver crash) — {summary}"))
+        }
     }
 }
 

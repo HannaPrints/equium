@@ -141,10 +141,15 @@ export default function DownloadPage() {
                   template.</strong> Saves driver-debugging time.
                 </li>
                 <li>
-                  <strong>Driver 535 / 545 / 550 LTS.</strong> 575.x
-                  has a SPIR-V crash that <Code>cloud-mine.sh</Code>{" "}
-                  auto-handles, but skipping those listings saves a
-                  reboot.
+                  <strong>Driver 535 / 545 / 550.</strong> Confirmed
+                  working. <strong>Avoid 555 / 565 / 570 / 575</strong>{" "}
+                  — that branch ships a SPIR-V compiler bug that
+                  crashes our compute pipelines.{" "}
+                  <Code>cloud-mine.sh</Code> auto-detects it on bare
+                  metal and offers a downgrade, but inside a vast.ai
+                  Docker container the driver belongs to the host and
+                  can't be replaced from inside — so pick a different
+                  listing rather than burn the rental.
                 </li>
               </ul>
             </Block>

@@ -300,15 +300,28 @@ maybe_fix_nvidia() {
   fi
   local drv
   drv=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1 | tr -d '[:space:]')
-  [[ "$drv" =~ ^575\. ]] || return 0
+  # The NVIDIA open-driver branch (555 / 565 / 570 / 575) all ship a
+  # SPIR-V compiler that fails on Naga output during compute pipeline
+  # creation — surfaces as wgpu's "Parent device is lost" validation
+  # error mid-init. Confirmed user-reports: 555.52.04 and 575.51.03.
+  # The 535/545/550 LTS branches are healthy.
+  [[ "$drv" =~ ^(555|565|570|575)\. ]] || return 0
 
   warn "NVIDIA driver $drv has a known SPIR-V crash bug in compute pipelines."
 
   if [[ $IN_DOCKER -eq 1 ]]; then
-    warn "Inside a container — can't replace the kernel module from here."
-    warn "The miner will auto-fall-back to the GL backend (slower but functional)."
-    warn "For full speed: rent a non-Docker instance, or ask the provider for driver ≤545."
-    return 0
+    fatal "Inside a container — driver replacement requires kernel-module
+        access we don't have. This instance won't run the GPU miner.
+
+        Realistic options:
+          1. Stop this rental, pick another vast.ai / Runpod listing
+             with driver 535.x / 545.x / 550.x (avoid 555-575).
+          2. Use the CPU miner here instead:
+               cargo build --release -p equium-cli-miner
+               ./target/release/equium-miner \\
+                 --rpc-url \$RPC --keypair \$KEY --threads \$(nproc)
+             (won't beat GPU economics — only useful if the rental
+              is already paid for and you don't want to waste it.)"
   fi
 
   # If the LTS driver is already installed alongside, just suggest a
