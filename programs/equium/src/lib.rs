@@ -4,6 +4,14 @@
 //! canonical design. Account structs live in this file (Anchor 0.31 expects
 //! them next to `#[program]`); handler logic lives in `instructions/`.
 
+// Anchor 0.31's `#[program]` macro expands to a call to
+// `AccountInfo::realloc`, which solana-program 2.x marked deprecated
+// in favor of `resize()`. The deprecation is purely cosmetic — both
+// methods compile to the same on-chain code path. Anchor's next
+// release fixes the macro; until then we suppress at the crate
+// level so user builds aren't drowned in macro-derived warnings.
+#![allow(deprecated)]
+
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};

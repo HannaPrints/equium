@@ -35,6 +35,54 @@ warn()  { printf "${C_GOLD}!${C_RESET} %s\n" "$*"; }
 fatal() { printf "\033[31m✗ %s${C_RESET}\n" "$*" >&2; exit 1; }
 hr()    { printf "${C_DIM}%s${C_RESET}\n" "════════════════════════════════════════════════════════════════"; }
 
+# Run a long-running command behind a spinner so the operator sees
+# elapsed time instead of a wall of compiler warnings. Stdout + stderr
+# are captured to a temp log; on success it's discarded, on failure
+# it's preserved so the operator can debug.
+#
+# Usage: spin "Building miner" cargo build --release --quiet -p equium-gpu-miner
+spin() {
+  local label="$1"; shift
+  if [[ ! -t 1 ]]; then
+    # Non-TTY (CI, redirect to file) — just run it loudly.
+    "$@"
+    return
+  fi
+  local log
+  log=$(mktemp -t equium-spin-XXXXXX.log)
+  "$@" >"$log" 2>&1 &
+  local pid=$!
+  local start; start=$(date +%s)
+  local i=0
+  # shellcheck disable=SC2034
+  local frames='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+  # Trap Ctrl-C so we kill the child if the user gives up.
+  trap "kill $pid 2>/dev/null; printf '\r\033[K'; exit 130" INT TERM
+  while kill -0 "$pid" 2>/dev/null; do
+    local elapsed=$(( $(date +%s) - start ))
+    local frame="${frames:i:1}"
+    i=$(( (i + 1) % ${#frames} ))
+    printf "\r${C_ROSE}▸${C_RESET} %s ${C_GOLD}%s${C_RESET}  ${C_DIM}%ds${C_RESET}   " \
+      "$label" "$frame" "$elapsed"
+    sleep 0.15
+  done
+  wait "$pid"
+  local rc=$?
+  trap - INT TERM
+  local total=$(( $(date +%s) - start ))
+  printf "\r\033[K"
+  if [[ $rc -eq 0 ]]; then
+    ok "$label done in ${total}s"
+    rm -f "$log"
+  else
+    printf "\033[31m✗ %s failed (rc=%d, %ds)${C_RESET}\n" "$label" "$rc" "$total" >&2
+    printf "  ${C_DIM}Last 30 lines of output:${C_RESET}\n"
+    tail -30 "$log" | sed 's/^/    /'
+    printf "\n  ${C_DIM}Full log: %s${C_RESET}\n" "$log"
+    exit "$rc"
+  fi
+}
+
 # ----- preflight ------------------------------------------------------
 hr
 printf "${C_BOLD}Equium cloud-mine bootstrap${C_RESET}\n"
@@ -199,23 +247,37 @@ if ! command -v pkg-config >/dev/null; then apt_install pkg-config build-essenti
 # is in place. If we can't install it (no apt etc.) the miner's
 # auto-probe falls back to GL.
 if ! command -v vulkaninfo >/dev/null; then
-  info "Installing Vulkan loader…"
-  apt_install libvulkan1 vulkan-tools libvulkan-dev || warn "Vulkan install failed — GL fallback will be used."
+  spin "Installing Vulkan loader" \
+    $SUDO apt-get install -y -qq libvulkan1 vulkan-tools libvulkan-dev \
+      || warn "Vulkan install failed — GL fallback will be used."
 fi
 ok "Vulkan present"
 
+# Make sure PATH picks up rust + solana additions in this shell AND
+# any future ones (write to .bashrc once), so the operator never has
+# to "restart your shell".
+ensure_path_line() {
+  local line="$1"
+  local rc="$HOME/.bashrc"
+  [[ -f "$rc" ]] || touch "$rc"
+  grep -qF "$line" "$rc" 2>/dev/null || printf '\n%s\n' "$line" >> "$rc"
+}
+
 if ! command -v cargo >/dev/null; then
-  info "Installing Rust (rustup)…"
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal
+  spin "Installing Rust toolchain" \
+    bash -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | \
+             sh -s -- -y --no-modify-path --default-toolchain stable --profile minimal'
   # shellcheck disable=SC1091
   source "$HOME/.cargo/env"
+  ensure_path_line 'source "$HOME/.cargo/env"'
 fi
-ok "Rust $(rustc --version | awk '{print $2}')"
+ok "Rust $(rustc --version 2>/dev/null | awk '{print $2}')"
 
 if ! command -v solana-keygen >/dev/null; then
-  info "Installing Solana CLI…"
-  sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+  spin "Installing Solana CLI" \
+    bash -c 'sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"'
   export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+  ensure_path_line 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"'
 fi
 ok "Solana CLI present"
 
@@ -231,21 +293,23 @@ else
 fi
 cd "$REPO_DIR"
 
-if [[ -x target/release/equium-gpu-miner ]] && [[ "$(uname -s)" = "Linux" ]]; then
+need_build=1
+if [[ -x target/release/equium-gpu-miner ]]; then
   # Cheap freshness check: rebuild only if source touched after binary.
   src_mtime=$(stat -c %Y clients/gpu-miner/src/main.rs 2>/dev/null || echo 0)
   bin_mtime=$(stat -c %Y target/release/equium-gpu-miner 2>/dev/null || echo 0)
-  if [[ "$src_mtime" -gt "$bin_mtime" ]]; then
-    info "Source changed — rebuilding equium-gpu-miner…"
-    cargo build --release --quiet -p equium-gpu-miner
-  else
-    ok "Binary up to date — skipping build"
+  if [[ "$src_mtime" -le "$bin_mtime" ]]; then
+    need_build=0
+    ok "equium-gpu-miner up to date — skipping build"
   fi
-else
-  info "Building equium-gpu-miner (release)…"
-  cargo build --release --quiet -p equium-gpu-miner
 fi
-ok "Built target/release/equium-gpu-miner"
+if [[ $need_build -eq 1 ]]; then
+  # Suppress the unactionable warning spam from anchor/solana_sdk
+  # transitive crates — the spinner shows progress instead. The full
+  # log only surfaces if the build actually fails.
+  spin "Building equium-gpu-miner (release, ~1–3 min)" \
+    cargo build --release --quiet -p equium-gpu-miner
+fi
 
 # ----- step 3: keypair ----------------------------------------------
 KEYPAIR_PATH="${EQUIUM_KEYPAIR:-$HOME/.config/solana/id.json}"

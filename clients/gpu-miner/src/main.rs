@@ -29,6 +29,7 @@ use solana_sdk::compute_budget::ComputeBudgetInstruction;
 use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{read_keypair_file, Keypair, Signer};
+#[allow(deprecated)]
 use solana_sdk::system_program;
 use solana_sdk::sysvar;
 use solana_sdk::transaction::Transaction;

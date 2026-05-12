@@ -110,7 +110,13 @@ pub struct GpuLeafGen {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
+    // Fields below are kept alive for wgpu's resource lifecycle; rustc
+    // can't see that the device's refcount needs them so flags them
+    // as dead code. Suppress at the field level rather than crate-wide
+    // so real dead code in this file still warns.
+    #[allow(dead_code)]
     bind_group_layout: wgpu::BindGroupLayout,
+    #[allow(dead_code)]
     pub backend: wgpu::Backend,
     pub adapter_name: String,
     /// Workgroup size baked into the compiled pipeline. Used to size
