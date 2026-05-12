@@ -101,7 +101,7 @@ export default function DownloadPage() {
                   compatible with our official template (Ubuntu 22.04 +
                   CUDA 12.4 + verified host + sane sizing). Clicking
                   through pre-populates the rental dialog so the user
-                  just hits "Rent" → SSH → ./cloud-mine.sh. */}
+                  just hits "Rent" → SSH → ./equium-install.sh. */}
               <div className="my-5">
                 <a
                   href="https://cloud.vast.ai?ref_id=536464&template_id=374ef07348ceb9164823cc755e06fd9c"
@@ -155,105 +155,50 @@ export default function DownloadPage() {
               </ul>
             </Block>
 
-            <Block label="2 · SSH in and run the bootstrap">
-              <Pre>{`./cloud-mine.sh`}</Pre>
+            <Block label="2 · SSH in and run the installer">
+              <Pre>{`./equium-install.sh`}</Pre>
               <P>
-                The template's on-start script stages{" "}
-                <Code>cloud-mine.sh</Code> at <Code>~/cloud-mine.sh</Code>{" "}
-                and prints a reminder in the SSH MOTD. Running it
-                installs Rust + Vulkan + Solana CLI if they're missing,
-                clones the repo, builds <Code>equium-gpu-miner</Code>,
-                generates a mining keypair, and runs <Code>verify</Code>{" "}
-                so you can see your rented GPU is detected. Then it
-                prints a Solana address and waits.
+                The template's on-start script stages it at{" "}
+                <Code>~/equium-install.sh</Code> with an SSH MOTD
+                reminder. The installer takes you from a bare box to
+                an actively mining miner: tools, build, keypair, RPC
+                prompt, balance wait, mine. Re-runnable — Ctrl-C +
+                rerun resumes instantly.
               </P>
-              <Callout tone="dim">
-                Not using our template? Same command works on any
-                Linux box —{" "}
-                <Code>
-                  curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/cloud-mine.sh
-                  -o cloud-mine.sh &amp;&amp; chmod +x cloud-mine.sh
-                </Code>
-                .
-              </Callout>
             </Block>
 
             <Block label="3 · Fund + mine">
               <P>
-                Send ~0.01 SOL to the printed address for tx fees, and
-                paste a Helius RPC URL when prompted. The script polls
-                the balance until the funds land, then execs the miner.
-                That's it.
+                Send ~0.01 SOL to the printed address for tx fees, paste
+                a Helius RPC URL when prompted, done.
               </P>
               <Callout tone="dim">
-                <strong>The script handles every weird case for you.</strong>{" "}
-                The miner's backend auto-probe runs each candidate in
-                a subprocess (so a driver SIGSEGV in{" "}
-                <Code>libnvidia-glvkspirv.so</Code> kills only the
-                probe child, not your shell), and{" "}
-                <Code>cloud-mine.sh</Code> detects NVIDIA 575.x via{" "}
-                <Code>nvidia-smi</Code> and offers a one-keypress{" "}
-                <Code>apt install nvidia-driver-535-server</Code> + reboot
-                — the permanent fix for that branch's SPIR-V crash. After
-                reboot, rerun the script and it skips straight to mining
-                (RPC URL is saved at <Code>~/.config/equium/rpc</Code>).
-                Override the backend choice via{" "}
-                <Code>EQUIUM_BACKEND=vulkan|gl|metal|dx12</Code> if you
-                ever need to.
+                <strong>Built to handle the weird cases.</strong>{" "}
+                Backend auto-probe runs in subprocesses so a driver
+                SIGSEGV kills the probe, not your shell. NVIDIA
+                555-575 SPIR-V crash branch is detected and the
+                installer offers a one-keypress fix (apt-install
+                driver 535 + reboot). Override the backend choice
+                with <Code>EQUIUM_BACKEND=cuda|vulkan|gl</Code> or
+                force the hybrid path with{" "}
+                <Code>EQUIUM_HYBRID=1</Code> if you ever need to.
+                Stuck? Run <Code>./equium-install.sh --doctor</Code>{" "}
+                for a redacted report you can paste in a GitHub issue.
               </Callout>
               <Callout tone="dim">
-                <strong>Something not working?</strong> Run{" "}
-                <Code>./cloud-mine.sh --doctor</Code> for a one-page
-                redacted report (OS / GPU / drivers / Vulkan / tool
-                versions / repo state / recent logs) you can paste
-                into a GitHub issue. Helius API keys + tokens are
-                stripped automatically; keypair contents are never
-                read.
-              </Callout>
-              <Callout tone="dim">
-                <strong>Keep the keypair if you want to keep mining.</strong>{" "}
-                vast.ai instances are ephemeral — when you stop the
-                rental, the box goes away. Copy{" "}
-                <Code>~/.config/solana/id.json</Code> off the box
-                before destroying the instance, or your mined EQM stays
-                tied to a key only that instance held. The{" "}
+                <strong>Save the wallet before destroying the rental.</strong>{" "}
+                vast.ai instances are ephemeral. The installer prints
+                a seed phrase + keypair path on every run — copy them
+                off the box, or your mined EQM goes with the rental.
+                The{" "}
                 <Link href="/mine" className="text-[var(--color-rose)] hover:underline">
                   browser miner
                 </Link>{" "}
-                gives you the same wallet on any device for free, FYI.
+                gives you the same wallet on any device, no rental
+                required.
               </Callout>
             </Block>
           </Section>
-
-          {/* Common prerequisites */}
-          <section className="mb-12">
-            <h2 className="text-[22px] font-bold tracking-[-0.015em] mb-3">
-              What you'll need
-            </h2>
-            <ul className="list-disc pl-6 space-y-2 text-[14.5px] leading-[1.65] text-[var(--color-fg-dim)]">
-              <li>
-                A Solana keypair file. Generate one with{" "}
-                <Code>solana-keygen new -o ~/.config/solana/id.json</Code>{" "}
-                (the Solana CLI install instructions are part of each section
-                below).
-              </li>
-              <li>
-                A small amount of SOL for transaction fees in that keypair's
-                address. Roughly 0.01 SOL covers a few hours of mining.
-              </li>
-              <li>
-                A Solana RPC endpoint. A free Helius key is fine —{" "}
-                <Link
-                  href="/docs/rpc"
-                  className="text-[var(--color-rose)] hover:underline"
-                >
-                  5-minute setup
-                </Link>
-                . The default public mainnet endpoint will rate-limit you out
-                of meaningful mining within seconds.
-              </li>
-            </ul>
-          </section>
 
           {/* macOS */}
           <Section id="macos" title="macOS">
@@ -302,24 +247,20 @@ cargo build --release -p equium-gpu-miner
           <Section id="linux" title="Linux">
             <Callout>
               <strong>Easiest: one command does everything.</strong>{" "}
-              The same installer that powers vast.ai mining works on
-              any Linux box. It installs Rust, the Solana CLI, Vulkan,
-              and{" "}
-              <Code>nvcc</Code> (on NVIDIA), builds the miner with the{" "}
-              CUDA backend, and starts mining with{" "}
-              <Code>--full-gpu</Code>.
-              <Pre>{`curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/cloud-mine.sh \\
-  -o ~/cloud-mine.sh && chmod +x ~/cloud-mine.sh && ~/cloud-mine.sh`}</Pre>
+              Installs Rust, the Solana CLI, Vulkan, and{" "}
+              <Code>nvcc</Code> (on NVIDIA), builds the miner with the
+              CUDA backend, generates a keypair, asks for an RPC URL,
+              and starts mining with <Code>--full-gpu</Code>. Works on
+              Ubuntu, Debian, Arch, Fedora — anything with{" "}
+              <Code>apt</Code>, <Code>pacman</Code>, or{" "}
+              <Code>dnf</Code>.
+              <Pre>{`curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/install.sh \\
+  -o ~/equium-install.sh && chmod +x ~/equium-install.sh && ~/equium-install.sh`}</Pre>
               <span className="text-[12px] text-[var(--color-fg-dim)]">
-                Re-runnable. Saves the keypair + RPC URL so Ctrl-C +
-                rerun resumes mining instantly. Prefer to build by
-                hand? Manual steps below.
+                Re-runnable — Ctrl-C + rerun resumes mining. Prefer to
+                build by hand? Manual steps below.
               </span>
             </Callout>
-            <P>
-              Tested on Ubuntu 22.04, Debian 12, Arch, and Fedora. Other
-              distros work the same — adjust the package manager call.
-            </P>
             <Block label="1 · Install build tools">
               <Pre>{`# Debian / Ubuntu
 sudo apt update && sudo apt install -y build-essential pkg-config libssl-dev curl git
@@ -400,8 +341,8 @@ cargo build --release -p equium-gpu-miner --features cuda
               <strong>Easiest: one command inside WSL.</strong> After
               installing WSL2 + Ubuntu (step 1), drop into Ubuntu and
               run:
-              <Pre>{`curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/cloud-mine.sh \\
-  -o ~/cloud-mine.sh && chmod +x ~/cloud-mine.sh && ~/cloud-mine.sh`}</Pre>
+              <Pre>{`curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/install.sh \\
+  -o ~/equium-install.sh && chmod +x ~/equium-install.sh && ~/equium-install.sh`}</Pre>
               <span className="text-[12px] text-[var(--color-fg-dim)]">
                 Installs everything (Rust, Solana CLI, Vulkan,{" "}
                 <Code>nvcc</Code> for NVIDIA), builds the miner, and
@@ -473,38 +414,49 @@ cargo build --release -p equium-gpu-miner --features cuda
             </Callout>
           </Section>
 
-          {/* Tune your GPU miner */}
+          {/* Tune & verify */}
           <Section id="advanced" title="Tune & verify">
-            <Block label="Sanity-check your driver">
-              <Pre>{`./target/release/equium-gpu-miner verify`}</Pre>
+            <Block label="Validate the full-GPU pipeline on your card">
+              <Pre>{`./target/release/equium-gpu-miner verify-rounds --nonces 4`}</Pre>
               <P>
-                Auto-probes Vulkan → GL in subprocesses (so a driver
-                SIGSEGV kills only the probe child), then compares
-                the WGSL leaves output against the CPU reference. A
-                healthy box prints{" "}
-                <Code>✓ GPU output matches CPU reference byte-for-byte</Code>.
+                <Code>--full-gpu</Code> runs all five Wagner rounds on
+                the GPU.{" "}
+                <Code>verify-rounds</Code> reruns the pipeline
+                alongside the CPU reference and asserts they find the
+                same solutions on your specific driver. Reference
+                point: ~320 H/s on a 4090 + CUDA, vs ~15 H/s on the
+                hybrid path.
               </P>
             </Block>
 
-            <Block label="Full-GPU mode (--full-gpu)">
-              <Pre>{`./target/release/equium-gpu-miner verify-rounds --nonces 4
-./target/release/equium-gpu-miner mine --full-gpu \\
-  --rpc-url https://mainnet.helius-rpc.com/?api-key=YOUR_KEY \\
-  --keypair ~/.config/solana/id.json`}</Pre>
-              <P>
-                Runs all five Wagner rounds + the solution scan on the
-                GPU instead of the CPU. On NVIDIA with the CUDA backend
-                this is ~20× the hybrid path (e.g. ~320 H/s on a 4090
-                vs ~15 H/s hybrid).{" "}
-                <Code>verify-rounds</Code> validates the GPU pipeline
-                against the CPU reference at every round, on your
-                specific driver, before you commit.
-              </P>
+            <Block label="Knobs">
+              <ul className="list-disc pl-6 space-y-1.5 text-[14px] leading-[1.65] text-[var(--color-fg-dim)]">
+                <li>
+                  <Code>EQUIUM_BACKEND=cuda|vulkan|gl|metal|dx12</Code>{" "}
+                  — force a specific backend instead of auto-probing.
+                </li>
+                <li>
+                  <Code>EQUIUM_HYBRID=1</Code> — force the
+                  CPU-Wagner + GPU-BLAKE2b path (fallback if{" "}
+                  <Code>--full-gpu</Code> misbehaves).
+                </li>
+                <li>
+                  <Code>--threads N</Code> — workers used for header
+                  bookkeeping + hybrid Wagner. Defaults to{" "}
+                  <Code>num_cpus</Code>.
+                </li>
+                <li>
+                  <Code>bench</Code> /{" "}
+                  <Code>bench-wagner</Code> subcommands print raw
+                  BLAKE2b / Wagner throughput in case you want a
+                  number to compare cards.
+                </li>
+              </ul>
             </Block>
 
             <Callout tone="dim">
-              <Code>bench</Code> prints BLAKE2b throughput at full
-              width if you want a number. Full source + roadmap at{" "}
+              Full source + the WGSL/CUDA kernel implementations are
+              at{" "}
               <a
                 href="https://github.com/HannaPrints/equium/tree/master/clients/gpu-miner"
                 className="text-[var(--color-rose)] hover:underline"
