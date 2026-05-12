@@ -78,10 +78,47 @@ fn main() {
     }
 }
 
+/// Detect the compute capability of the first available NVIDIA GPU.
+/// Falls back to "compute_70" (Volta) if detection fails — PTX is
+/// forward-compatible so the binary still runs on newer cards via JIT.
+fn detect_compute_arch(nvcc: &str) -> String {
+    // Honour an explicit override, e.g. CUDA_ARCH=sm_120 for Blackwell.
+    if let Ok(arch) = env::var("CUDA_ARCH") {
+        let arch = arch.trim().to_string();
+        // Accept both "sm_120" and "compute_120" spellings.
+        return if arch.starts_with("sm_") {
+            arch.replacen("sm_", "compute_", 1)
+        } else {
+            arch
+        };
+    }
+
+    // Ask nvidia-smi for the compute capability of device 0.
+    let out = Command::new("nvidia-smi")
+        .args(["--query-gpu=compute_cap", "--format=csv,noheader", "--id=0"])
+        .output();
+
+    if let Ok(out) = out {
+        if out.status.success() {
+            let cap = String::from_utf8_lossy(&out.stdout);
+            let cap = cap.trim().replace('.', "");
+            if !cap.is_empty() {
+                return format!("compute_{cap}");
+            }
+        }
+    }
+
+    // Safe baseline: Volta (sm_70). PTX is forward-compatible.
+    "compute_70".to_string()
+}
+
 fn compile_cu(nvcc: &str, src: &Path, dst: &Path) {
+    let arch = detect_compute_arch(nvcc);
+    eprintln!("equium-gpu-miner build.rs: compiling {} with --gpu-architecture={arch}", src.display());
+
     let status = Command::new(nvcc)
         .arg("--ptx")
-        .arg("--gpu-architecture=compute_70")
+        .arg(format!("--gpu-architecture={arch}"))
         .arg("-O3")
         .arg("--use_fast_math")
         .arg("-o")
@@ -90,6 +127,12 @@ fn compile_cu(nvcc: &str, src: &Path, dst: &Path) {
         .status()
         .unwrap_or_else(|e| panic!("nvcc spawn failed for {}: {e}", src.display()));
     if !status.success() {
-        panic!("nvcc failed for {} (exit {:?})", src.display(), status.code());
+        panic!(
+            "nvcc failed for {} (exit {:?})\n\
+             If you see \"Unsupported gpu architecture\", try:\n\
+             CUDA_ARCH=sm_XX cargo build --features cuda\n\
+             (replace XX with your GPU's compute capability, e.g. 89 for RTX 4090, 120 for RTX 5090)",
+            src.display(), status.code()
+        );
     }
 }
