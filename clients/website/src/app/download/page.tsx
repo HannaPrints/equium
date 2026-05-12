@@ -281,7 +281,9 @@ cargo build --release -p equium-gpu-miner
 # matches the CPU reference byte-for-byte.
 ./target/release/equium-gpu-miner verify
 
-./target/release/equium-gpu-miner mine \\
+# --full-gpu runs all five Wagner rounds on the GPU. Drops the flag
+# if you want the hybrid path (CPU does Wagner, GPU does BLAKE2b).
+./target/release/equium-gpu-miner mine --full-gpu \\
   --rpc-url https://mainnet.helius-rpc.com/?api-key=YOUR_KEY \\
   --keypair ~/.config/solana/id.json`}</Pre>
               <P>
@@ -291,13 +293,29 @@ cargo build --release -p equium-gpu-miner
                 <a href="#advanced" className="text-[var(--color-rose)] hover:underline">
                   Tune your GPU miner
                 </a>{" "}
-                for benchmarks and the v0.2 full-GPU mode.
+                for benchmarks.
               </P>
             </Block>
           </Section>
 
           {/* Linux */}
           <Section id="linux" title="Linux">
+            <Callout>
+              <strong>Easiest: one command does everything.</strong>{" "}
+              The same installer that powers vast.ai mining works on
+              any Linux box. It installs Rust, the Solana CLI, Vulkan,
+              and{" "}
+              <Code>nvcc</Code> (on NVIDIA), builds the miner with the{" "}
+              CUDA backend, and starts mining with{" "}
+              <Code>--full-gpu</Code>.
+              <Pre>{`curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/cloud-mine.sh \\
+  -o ~/cloud-mine.sh && chmod +x ~/cloud-mine.sh && ~/cloud-mine.sh`}</Pre>
+              <span className="text-[12px] text-[var(--color-fg-dim)]">
+                Re-runnable. Saves the keypair + RPC URL so Ctrl-C +
+                rerun resumes mining instantly. Prefer to build by
+                hand? Manual steps below.
+              </span>
+            </Callout>
             <P>
               Tested on Ubuntu 22.04, Debian 12, Arch, and Fedora. Other
               distros work the same — adjust the package manager call.
@@ -325,8 +343,8 @@ export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"`}</Pre>
 solana-keygen pubkey ~/.config/solana/id.json`}</Pre>
             </Block>
             <Block label="5 · Build + run the GPU miner">
-              <Pre>{`# Vulkan loader (wgpu's preferred path on Linux). If it's missing
-# the miner falls back to GL automatically — but Vulkan is faster.
+              <Pre>{`# Vulkan loader (the wgpu fallback path; AMD/Intel use it,
+# NVIDIA on healthy drivers does too).
 # Debian / Ubuntu
 sudo apt install -y libvulkan1 vulkan-tools
 # Arch
@@ -334,21 +352,33 @@ sudo pacman -S vulkan-icd-loader vulkan-tools
 # Fedora
 sudo dnf install -y vulkan-loader vulkan-tools
 
+# NVIDIA only — install nvcc so we can build the CUDA backend.
+# Skip this on AMD/Intel.
+sudo apt install -y nvidia-cuda-toolkit
+
 git clone https://github.com/HannaPrints/equium.git
 cd equium
-cargo build --release -p equium-gpu-miner
 
-# Sanity check. The miner self-probes Vulkan → GL in subprocesses
-# so a buggy driver kills the probe child, not your terminal.
+# NVIDIA → enable the CUDA backend (fastest path, also bypasses
+# the SPIR-V crash on driver 555-575).
+cargo build --release -p equium-gpu-miner --features cuda
+# AMD / Intel / no nvcc → drop --features cuda:
+# cargo build --release -p equium-gpu-miner
+
+# Sanity check. The miner self-probes CUDA → Vulkan → GL in
+# subprocesses so a buggy driver kills the probe, not your terminal.
 ./target/release/equium-gpu-miner verify
 
-./target/release/equium-gpu-miner mine \\
+# --full-gpu runs all five Wagner rounds on the GPU. On a 4090 with
+# CUDA this is ~20× the hybrid path. Drop the flag for hybrid mode.
+./target/release/equium-gpu-miner mine --full-gpu \\
   --rpc-url https://mainnet.helius-rpc.com/?api-key=YOUR_KEY \\
   --keypair ~/.config/solana/id.json`}</Pre>
               <P>
-                Works on NVIDIA, AMD, and Intel GPUs that support
-                Vulkan 1.1+ (or GL 4.5 as fallback). If{" "}
-                <Code>vulkaninfo</Code> lists your adapter, the miner
+                Works on NVIDIA (CUDA or Vulkan), AMD, and Intel GPUs
+                that support Vulkan 1.1+ (or GL 4.5 as fallback). If{" "}
+                <Code>vulkaninfo</Code> lists your adapter or{" "}
+                <Code>nvidia-smi</Code> shows a healthy GPU, the miner
                 will pick it up. Once mining works, see{" "}
                 <a href="#advanced" className="text-[var(--color-rose)] hover:underline">
                   Tune your GPU miner
@@ -365,6 +395,19 @@ cargo build --release -p equium-gpu-miner
               Windows + Rust + Solana CLI is theoretically possible but
               accumulates papercuts fast (path handling, OpenSSL, line
               endings). Run Linux inside Windows via WSL2 and skip them.
+            </Callout>
+            <Callout>
+              <strong>Easiest: one command inside WSL.</strong> After
+              installing WSL2 + Ubuntu (step 1), drop into Ubuntu and
+              run:
+              <Pre>{`curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/cloud-mine.sh \\
+  -o ~/cloud-mine.sh && chmod +x ~/cloud-mine.sh && ~/cloud-mine.sh`}</Pre>
+              <span className="text-[12px] text-[var(--color-fg-dim)]">
+                Installs everything (Rust, Solana CLI, Vulkan,{" "}
+                <Code>nvcc</Code> for NVIDIA), builds the miner, and
+                starts mining with <Code>--full-gpu</Code>. Skip steps
+                2-5 below.
+              </span>
             </Callout>
 
             <Block label="1 · Install WSL2 + Ubuntu (one-time)">
@@ -399,18 +442,23 @@ export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"`}</Pre>
 solana-keygen pubkey ~/.config/solana/id.json    # send SOL here
 
 # WSL2 exposes your Windows GPU via Vulkan (NVIDIA + AMD have full
-# support; Intel works on recent drivers). Install Vulkan dev headers:
+# support; Intel works on recent drivers). Install Vulkan + nvcc
+# (the latter only if you have an NVIDIA card):
 sudo apt install -y libvulkan1 vulkan-tools
+sudo apt install -y nvidia-cuda-toolkit   # NVIDIA only
 
 git clone https://github.com/HannaPrints/equium.git
 cd equium
-cargo build --release -p equium-gpu-miner
 
-# Sanity check. Auto-probes Vulkan → GL in subprocesses so a buggy
-# driver kills the probe, not your shell.
+# NVIDIA → enable the CUDA backend. AMD/Intel → drop --features cuda.
+cargo build --release -p equium-gpu-miner --features cuda
+
+# Sanity check. Auto-probes CUDA → Vulkan → GL in subprocesses so
+# a buggy driver kills the probe, not your shell.
 ./target/release/equium-gpu-miner verify
 
-./target/release/equium-gpu-miner mine \\
+# --full-gpu = all five Wagner rounds on the GPU. The fast path.
+./target/release/equium-gpu-miner mine --full-gpu \\
   --rpc-url https://mainnet.helius-rpc.com/?api-key=YOUR_KEY \\
   --keypair ~/.config/solana/id.json`}</Pre>
             </Block>
@@ -438,17 +486,19 @@ cargo build --release -p equium-gpu-miner
               </P>
             </Block>
 
-            <Block label="Full-GPU mode (v0.2, opt-in)">
+            <Block label="Full-GPU mode (--full-gpu)">
               <Pre>{`./target/release/equium-gpu-miner verify-rounds --nonces 4
 ./target/release/equium-gpu-miner mine --full-gpu \\
   --rpc-url https://mainnet.helius-rpc.com/?api-key=YOUR_KEY \\
   --keypair ~/.config/solana/id.json`}</Pre>
               <P>
-                Moves all five Wagner rounds + the solution scan onto
-                the GPU. The algorithm is byte-for-byte validated
-                against the CPU reference at every round;{" "}
-                <Code>verify-rounds</Code> repeats that check on your
-                specific driver before you commit.
+                Runs all five Wagner rounds + the solution scan on the
+                GPU instead of the CPU. On NVIDIA with the CUDA backend
+                this is ~20× the hybrid path (e.g. ~320 H/s on a 4090
+                vs ~15 H/s hybrid).{" "}
+                <Code>verify-rounds</Code> validates the GPU pipeline
+                against the CPU reference at every round, on your
+                specific driver, before you commit.
               </P>
             </Block>
 

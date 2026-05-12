@@ -1,24 +1,34 @@
 #!/usr/bin/env bash
 #
-# Equium cloud-mining bootstrap.
+# Equium GPU miner — auto-install + mine.
 #
-# Designed for a fresh Ubuntu/Debian instance (vast.ai, Runpod, Lambda,
-# anything with an NVIDIA GPU + Vulkan driver). One command from "I
-# just rented this box" to "I'm mining EQM":
+# Works on any Ubuntu/Debian Linux box — your personal NVIDIA/AMD
+# machine, a vast.ai or Runpod rental, anything with `apt`. One
+# command from "I have a GPU" to "I'm mining EQM":
 #
 #   curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/cloud-mine.sh -o cloud-mine.sh
 #   chmod +x cloud-mine.sh
 #   ./cloud-mine.sh
 #
+# What it does:
+#   1. Installs Rust, Solana CLI, Vulkan loader, and nvcc (if NVIDIA).
+#   2. Clones + builds equium-gpu-miner (with --features cuda when
+#      nvcc is present, so the CUDA Wagner kernels are baked in).
+#   3. Generates a mining keypair, shows you the seed phrase to back up.
+#   4. Prompts for an RPC URL, validates it's mainnet.
+#   5. Waits for the wallet to be funded with a bit of SOL.
+#   6. Execs the miner with `--full-gpu` (the fast path) when CUDA
+#      is built in. Falls back to the hybrid path if you set
+#      EQUIUM_HYBRID=1.
+#
 # Re-runnable: every step short-circuits if its outputs already exist.
-# Ctrl-C during mining and rerun → goes straight back to mining.
-# Even survives a reboot: RPC URL + keypair location are persisted in
+# Ctrl-C during mining and rerun → goes straight back to mining. Even
+# survives a reboot: RPC URL + keypair location are persisted in
 # ~/.config/equium/ so the post-reboot run resumes cleanly.
 #
 # If the box ships NVIDIA driver 575.x (known SPIR-V crash bug), the
 # script offers to apt-install the 535 LTS replacement and reboot for
-# you. After reboot, ssh back in and rerun — you'll skip straight to
-# the mining step.
+# you. After reboot, rerun — you'll skip straight to the mining step.
 
 set -euo pipefail
 
@@ -194,7 +204,7 @@ fi
 
 # ----- preflight ------------------------------------------------------
 hr
-printf "${C_BOLD}Equium cloud-mine bootstrap${C_RESET}\n"
+printf "${C_BOLD}Equium GPU miner — auto-install${C_RESET}\n"
 hr
 
 if [[ "$(uname)" != "Linux" ]]; then
@@ -505,23 +515,35 @@ fi
 PUBKEY=$(solana-keygen pubkey "$KEYPAIR_PATH")
 
 # ----- wallet backup banner -----------------------------------------
-# vast.ai rentals are ephemeral. When the operator stops the instance
-# the keypair (and any unswept EQM) is gone with it. Always print the
-# banner — even on re-runs when the keypair pre-existed — so the
-# operator can copy it off before something interrupts them.
+# The seed phrase / keypair we just made is the *only* thing tying
+# mined EQM to its owner. Print it every run so the operator can copy
+# it somewhere safe before anything interrupts them. The "rental ends
+# → wallet gone" framing only applies in ephemeral environments —
+# Docker containers, cloud GPU rentals — so we conditional-tailor the
+# warning headline + the SCP hint.
+EPHEMERAL=0
+if [[ $IN_DOCKER -eq 1 ]] || [[ -d /etc/vastai ]] || [[ -n "${VAST_CONTAINERLABEL:-}" ]] || [[ -n "${RUNPOD_POD_ID:-}" ]]; then
+  EPHEMERAL=1
+fi
 hr
-printf "${C_BOLD}SAVE THIS WALLET${C_RESET}  ${C_DIM}— rental ends → wallet gone${C_RESET}\n"
+if [[ $EPHEMERAL -eq 1 ]]; then
+  printf "${C_BOLD}SAVE THIS WALLET${C_RESET}  ${C_DIM}— rental ends → wallet gone${C_RESET}\n"
+else
+  printf "${C_BOLD}BACK UP THIS WALLET${C_RESET}  ${C_DIM}— store the seed phrase somewhere safe${C_RESET}\n"
+fi
 hr
 printf "  ${C_GOLD}address${C_RESET}   %s\n" "$PUBKEY"
 printf "  ${C_GOLD}keypair${C_RESET}   %s\n" "$KEYPAIR_PATH"
 if [[ -s "$SEED_PATH" ]]; then
   printf "  ${C_GOLD}seed${C_RESET}      %s\n" "$(cat "$SEED_PATH")"
 fi
-printf "\n  ${C_DIM}Copy the keypair file to your local machine:${C_RESET}\n"
-printf "    ${C_MINT}scp -P <vast-port> root@<vast-host>:%s ~/equium-wallet.json${C_RESET}\n" "$KEYPAIR_PATH"
+if [[ $EPHEMERAL -eq 1 ]]; then
+  printf "\n  ${C_DIM}Copy the keypair file off the rental before destroying it:${C_RESET}\n"
+  printf "    ${C_MINT}scp -P <ssh-port> root@<host>:%s ~/equium-wallet.json${C_RESET}\n" "$KEYPAIR_PATH"
+fi
 if [[ ! -s "$SEED_PATH" ]]; then
-  printf "\n  ${C_DIM}Seed phrase wasn't captured (keypair pre-existed). Show it via:${C_RESET}\n"
-  printf "    ${C_MINT}cat %s${C_RESET}    # 64-byte JSON array — importable into Solana CLI${C_RESET}\n" "$KEYPAIR_PATH"
+  printf "\n  ${C_DIM}Seed phrase wasn't captured (keypair pre-existed). The keypair file is${C_RESET}\n"
+  printf "  ${C_DIM}importable directly — keep ${C_RESET}%s${C_DIM} safe.${C_RESET}\n" "$KEYPAIR_PATH"
 fi
 hr
 
@@ -663,7 +685,7 @@ fi
 
 hr
 printf "${C_BOLD}Mining EQM on $PUBKEY${C_RESET}\n"
-printf "${C_DIM}Press Ctrl-C to stop. Rerun ./cloud-mine.sh to resume — RPC + keypair are saved.${C_RESET}\n"
+printf "${C_DIM}Press Ctrl-C to stop. Rerun the script to resume — RPC + keypair are saved.${C_RESET}\n"
 if [[ -z "${EQUIUM_THREADS:-}" ]]; then
   printf "${C_DIM}Tip: EQUIUM_THREADS=32 ./cloud-mine.sh   (boost CPU Wagner workers)${C_RESET}\n"
 fi
