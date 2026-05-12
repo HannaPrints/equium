@@ -481,15 +481,49 @@ fi
 
 # ----- step 3: keypair ----------------------------------------------
 KEYPAIR_PATH="${EQUIUM_KEYPAIR:-$HOME/.config/solana/id.json}"
+SEED_PATH="$CONFIG_DIR/seed-phrase"  # mode 600, captured at keygen
 if [[ ! -f "$KEYPAIR_PATH" ]]; then
   info "Generating mining keypair at $KEYPAIR_PATH"
   mkdir -p "$(dirname "$KEYPAIR_PATH")"
-  solana-keygen new --no-bip39-passphrase --force -o "$KEYPAIR_PATH" >/dev/null
+  # Capture the keygen output so we can show the operator the BIP39
+  # seed phrase — without it, a destroyed rental loses the wallet
+  # (and any mined EQM still on it) forever.
+  keygen_log=$(mktemp)
+  solana-keygen new --no-bip39-passphrase --force -o "$KEYPAIR_PATH" \
+    > "$keygen_log" 2>&1
+  # The seed phrase is the line after "Save this seed phrase…".
+  phrase=$(awk '/Save this seed phrase/{getline; while ($0 == "") getline; print; exit}' "$keygen_log")
+  if [[ -n "$phrase" ]]; then
+    printf '%s\n' "$phrase" > "$SEED_PATH"
+    chmod 600 "$SEED_PATH"
+  fi
+  rm -f "$keygen_log"
   ok "Keypair created"
 else
   ok "Reusing keypair at $KEYPAIR_PATH"
 fi
 PUBKEY=$(solana-keygen pubkey "$KEYPAIR_PATH")
+
+# ----- wallet backup banner -----------------------------------------
+# vast.ai rentals are ephemeral. When the operator stops the instance
+# the keypair (and any unswept EQM) is gone with it. Always print the
+# banner — even on re-runs when the keypair pre-existed — so the
+# operator can copy it off before something interrupts them.
+hr
+printf "${C_BOLD}SAVE THIS WALLET${C_RESET}  ${C_DIM}— rental ends → wallet gone${C_RESET}\n"
+hr
+printf "  ${C_GOLD}address${C_RESET}   %s\n" "$PUBKEY"
+printf "  ${C_GOLD}keypair${C_RESET}   %s\n" "$KEYPAIR_PATH"
+if [[ -s "$SEED_PATH" ]]; then
+  printf "  ${C_GOLD}seed${C_RESET}      %s\n" "$(cat "$SEED_PATH")"
+fi
+printf "\n  ${C_DIM}Copy the keypair file to your local machine:${C_RESET}\n"
+printf "    ${C_MINT}scp -P <vast-port> root@<vast-host>:%s ~/equium-wallet.json${C_RESET}\n" "$KEYPAIR_PATH"
+if [[ ! -s "$SEED_PATH" ]]; then
+  printf "\n  ${C_DIM}Seed phrase wasn't captured (keypair pre-existed). Show it via:${C_RESET}\n"
+  printf "    ${C_MINT}cat %s${C_RESET}    # 64-byte JSON array — importable into Solana CLI${C_RESET}\n" "$KEYPAIR_PATH"
+fi
+hr
 
 # ----- step 4: GPU verify (auto-probe lives in the binary) ----------
 info "Verifying GPU shader (auto-probe Vulkan → GL)…"
@@ -605,10 +639,24 @@ else
 fi
 
 # ----- step 7: mine -------------------------------------------------
+# Operator can override the worker count via EQUIUM_THREADS — useful
+# inside containers where num_cpus undercounts the available cores
+# (vast.ai's cgroup quota often shows 8 even when the host has 64+).
+# Until the CUDA Wagner kernels land, Wagner runs on CPU workers, so
+# this directly bumps hashrate on under-counted hosts.
+mine_args=(
+  --rpc-url "$RPC_URL"
+  --keypair "$KEYPAIR_PATH"
+)
+if [[ -n "${EQUIUM_THREADS:-}" ]]; then
+  mine_args+=(--threads "$EQUIUM_THREADS")
+fi
+
 hr
 printf "${C_BOLD}Mining EQM on $PUBKEY${C_RESET}\n"
 printf "${C_DIM}Press Ctrl-C to stop. Rerun ./cloud-mine.sh to resume — RPC + keypair are saved.${C_RESET}\n"
+if [[ -z "${EQUIUM_THREADS:-}" ]]; then
+  printf "${C_DIM}Tip: EQUIUM_THREADS=32 ./cloud-mine.sh   (boost CPU Wagner workers)${C_RESET}\n"
+fi
 hr
-exec ./target/release/equium-gpu-miner mine \
-  --rpc-url "$RPC_URL" \
-  --keypair "$KEYPAIR_PATH"
+exec ./target/release/equium-gpu-miner mine "${mine_args[@]}"
