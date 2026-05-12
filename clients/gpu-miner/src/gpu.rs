@@ -84,6 +84,41 @@ pub fn pipeline_constants(wg_size: u32) -> std::collections::HashMap<String, f64
 /// cost of slower throughput, since GL doesn't expose every compute
 /// feature we'd otherwise use. Downgrading to NVIDIA driver 535 LTS
 /// is the recommended fix; `EQUIUM_BACKEND=gl` is the workaround.
+/// Detect if the NVIDIA driver version is in the known-crashy
+/// SPIR-V range (555.x – 580.x). These versions ship a libnvidia-glvkspirv.so
+/// that segfaults on valid Naga WGSL output during compute pipeline creation.
+/// Confirmed bad: 555.52, 565.x, 570.x, 575.x, 580.x
+/// Confirmed good: 535.x (LTS), 545.x, 550.x
+fn nvidia_driver_has_spirv_bug() -> bool {
+    let out = std::process::Command::new("nvidia-smi")
+        .args(["--query-gpu=driver_version", "--format=csv,noheader", "--id=0"])
+        .output();
+    if let Ok(out) = out {
+        if out.status.success() {
+            let ver = String::from_utf8_lossy(&out.stdout);
+            let ver = ver.trim();
+            // Check for major versions 555-580
+            if let Some(major) = ver.split('.').next() {
+                if let Ok(n) = major.parse::<u32>() {
+                    if (555..=580).contains(&n) {
+                        eprintln!(
+                            "equium: NVIDIA driver {ver} has a known SPIR-V crash bug (drivers 555-580)."
+                        );
+                        eprintln!(
+                            "equium: Auto-selecting GL backend. Set EQUIUM_BACKEND=vulkan to override."
+                        );
+                        eprintln!(
+                            "equium: For best performance, downgrade to driver 535 LTS or use --features cuda."
+                        );
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 pub fn backends_from_env() -> wgpu::Backends {
     match std::env::var("EQUIUM_BACKEND")
         .unwrap_or_default()
@@ -95,7 +130,15 @@ pub fn backends_from_env() -> wgpu::Backends {
         "metal" => wgpu::Backends::METAL,
         "dx12" => wgpu::Backends::DX12,
         "all" => wgpu::Backends::all(),
-        "" | "primary" | "auto" => wgpu::Backends::PRIMARY,
+        "" | "primary" | "auto" => {
+            // Auto-detect crashy NVIDIA drivers and fall back to GL.
+            // GL uses a different translation path and avoids the SPIR-V bug.
+            if nvidia_driver_has_spirv_bug() {
+                wgpu::Backends::GL
+            } else {
+                wgpu::Backends::PRIMARY
+            }
+        }
         // "cuda" is a sentinel handled by main.rs's dispatch — if we
         // got here with cuda set it means a wgpu path is being
         // constructed deliberately (e.g. fallback within the same
