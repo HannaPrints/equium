@@ -66,7 +66,7 @@ export default function DownloadPage() {
             <Callout>
               <strong>No GPU at home? Rent one for ~$0.20/hr.</strong>{" "}
               <a
-                href="https://cloud.vast.ai/?ref_id=270998"
+                href="https://cloud.vast.ai?ref_id=536464&template_id=1d86036c1e5c80842d0631344e0bfcc0"
                 target="_blank"
                 rel="noreferrer noopener"
                 className="text-[var(--color-rose)] hover:underline"
@@ -97,22 +97,26 @@ export default function DownloadPage() {
                 better $/hashrate than flagships.
               </P>
 
-              {/* CTA: opens vast.ai with a sensible pre-filter */}
+              {/* CTA: opens the marketplace pre-filtered to instances
+                  compatible with our official template (Ubuntu 22.04 +
+                  CUDA 12.4 + verified host + sane sizing). Clicking
+                  through pre-populates the rental dialog so the user
+                  just hits "Rent" → SSH → ./cloud-mine.sh. */}
               <div className="my-5">
                 <a
-                  href="https://cloud.vast.ai/?ref_id=270998&search_query=verified%3Dtrue%20rentable%3Dtrue%20num_gpus%3D1%20gpu_ram%3E%3D6%20cuda_max_good%3E%3D12"
+                  href="https://cloud.vast.ai?ref_id=536464&template_id=1d86036c1e5c80842d0631344e0bfcc0"
                   target="_blank"
                   rel="noreferrer noopener"
                   className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-[var(--color-rose)] text-[var(--color-bg)] font-bold text-[14px] hover:bg-[var(--color-rose-bright)] transition-colors"
                 >
-                  Open vast.ai with our filters
+                  Rent a GPU with our template
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
                     <path d="M7 17 17 7" />
                     <path d="M7 7h10v10" />
                   </svg>
                 </a>
                 <span className="ml-3 text-[12px] font-mono text-[var(--color-fg-dim)]">
-                  verified · 1 GPU · ≥6 GB VRAM · CUDA ≥12
+                  Ubuntu 22.04 · CUDA 12.4 · pre-filtered
                 </span>
               </div>
 
@@ -145,18 +149,27 @@ export default function DownloadPage() {
               </ul>
             </Block>
 
-            <Block label="2 · Run the bootstrap script">
-              <Pre>{`curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/cloud-mine.sh -o cloud-mine.sh
-chmod +x cloud-mine.sh
-./cloud-mine.sh`}</Pre>
+            <Block label="2 · SSH in and run the bootstrap">
+              <Pre>{`./cloud-mine.sh`}</Pre>
               <P>
-                The script installs Rust, the Vulkan loader, and the
-                Solana CLI if they're missing, clones the repo, builds{" "}
-                <Code>equium-gpu-miner</Code>, generates a mining
-                keypair, and runs <Code>verify</Code> so you can see
-                your rented GPU is detected. Then it prints a Solana
-                address and waits.
+                The template's on-start script stages{" "}
+                <Code>cloud-mine.sh</Code> at <Code>~/cloud-mine.sh</Code>{" "}
+                and prints a reminder in the SSH MOTD. Running it
+                installs Rust + Vulkan + Solana CLI if they're missing,
+                clones the repo, builds <Code>equium-gpu-miner</Code>,
+                generates a mining keypair, and runs <Code>verify</Code>{" "}
+                so you can see your rented GPU is detected. Then it
+                prints a Solana address and waits.
               </P>
+              <Callout tone="dim">
+                Not using our template? Same command works on any
+                Linux box —{" "}
+                <Code>
+                  curl -fsSL https://raw.githubusercontent.com/HannaPrints/equium/master/scripts/cloud-mine.sh
+                  -o cloud-mine.sh &amp;&amp; chmod +x cloud-mine.sh
+                </Code>
+                .
+              </Callout>
             </Block>
 
             <Block label="3 · Fund + mine">
