@@ -44,6 +44,8 @@ mod shader_ref;
 mod wagner;
 #[cfg(feature = "cuda")]
 mod cuda;
+#[cfg(feature = "cuda")]
+mod cuda_wagner;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "Equium GPU miner")]
@@ -558,6 +560,45 @@ fn bench(iterations: u32) -> Result<()> {
 // v0.2 full-GPU verification + bench
 // ============================================================================
 
+/// Backend-agnostic wrapper for the full Wagner pipeline. Lets
+/// verify-rounds / bench-wagner / mine --full-gpu pick wgpu or CUDA
+/// at runtime based on EQUIUM_BACKEND without duplicating the loop
+/// bodies. CudaWagner mutates internal device buffers on each
+/// dispatch so run_nonce is &mut self everywhere.
+enum AnyWagner {
+    Wgpu(wagner::GpuWagner),
+    #[cfg(feature = "cuda")]
+    Cuda(cuda_wagner::CudaWagner),
+}
+
+impl AnyWagner {
+    fn new() -> Result<Self> {
+        #[cfg(feature = "cuda")]
+        if std::env::var("EQUIUM_BACKEND").as_deref() == Ok("cuda") {
+            return Ok(AnyWagner::Cuda(cuda_wagner::CudaWagner::new()?));
+        }
+        Ok(AnyWagner::Wgpu(wagner::GpuWagner::new()?))
+    }
+    fn adapter_name(&self) -> &str {
+        match self {
+            AnyWagner::Wgpu(w) => &w.adapter_name,
+            #[cfg(feature = "cuda")]
+            AnyWagner::Cuda(w) => &w.adapter_name,
+        }
+    }
+    fn run_nonce(
+        &mut self,
+        input: &[u8; 81],
+        nonce: &[u8; 32],
+    ) -> Result<Vec<[u32; 32]>> {
+        match self {
+            AnyWagner::Wgpu(w) => w.run_nonce(input, nonce),
+            #[cfg(feature = "cuda")]
+            AnyWagner::Cuda(w) => w.run_nonce(input, nonce),
+        }
+    }
+}
+
 /// Sanity-check the full-GPU Wagner pipeline by running it alongside
 /// the CPU reference (shader_ref::wagner_full) on the same nonces and
 /// asserting they find the same solutions. Solutions are sparse, so
@@ -565,8 +606,8 @@ fn bench(iterations: u32) -> Result<()> {
 /// that *whenever* the CPU finds a solution, the GPU finds it too,
 /// and vice versa.
 fn verify_rounds(n_nonces: u32) -> Result<()> {
-    let wagner = wagner::GpuWagner::new()?;
-    println!("GPU backend: {}", wagner.adapter_name);
+    let mut wagner = AnyWagner::new()?;
+    println!("GPU backend: {}", wagner.adapter_name());
     println!(
         "verifying {} nonce(s) — CPU reference is unoptimized, expect ~few seconds each\n",
         n_nonces
@@ -639,8 +680,8 @@ fn verify_rounds(n_nonces: u32) -> Result<()> {
 }
 
 fn bench_wagner(iterations: u32) -> Result<()> {
-    let wagner = wagner::GpuWagner::new()?;
-    println!("GPU backend: {}", wagner.adapter_name);
+    let mut wagner = AnyWagner::new()?;
+    println!("GPU backend: {}", wagner.adapter_name());
 
     let (input, nonce) = fixed_test_input();
 
@@ -701,14 +742,14 @@ fn mine(
     } else {
         None
     };
-    let wagner_gpu = if full_gpu {
-        Some(wagner::GpuWagner::new()?)
+    let mut wagner_gpu = if full_gpu {
+        Some(AnyWagner::new()?)
     } else {
         None
     };
     let adapter_name = match (&leaf_gen, &wagner_gpu) {
         (Some(g), _) => g.backend_label().to_string(),
-        (_, Some(w)) => w.adapter_name.clone(),
+        (_, Some(w)) => w.adapter_name().to_string(),
         _ => unreachable!(),
     };
     println!("GPU backend: {}", adapter_name);
@@ -781,7 +822,7 @@ fn mine(
             // us responsive to height changes.
             let max_attempts = 32u64;
             let r = race_for_solution_full_gpu(
-                wagner_gpu.as_ref().unwrap(),
+                wagner_gpu.as_mut().unwrap(),
                 &input,
                 &cfg.current_target,
                 max_attempts,
@@ -940,7 +981,7 @@ fn race_for_solution_gpu(
 /// `GpuWagner::run_nonce`. Wagner is GPU-bound, so multi-threading
 /// here just contends on the single device; one thread saturates it.
 fn race_for_solution_full_gpu(
-    wagner_gpu: &wagner::GpuWagner,
+    wagner_gpu: &mut AnyWagner,
     input: &[u8; I_LEN],
     target: &[u8; 32],
     max_attempts: u64,
