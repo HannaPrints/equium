@@ -83,6 +83,17 @@ compares GPU output to `blake2b_simd` byte-for-byte.
 ./target/release/equium-gpu-miner verify
 ```
 
+Backend selection is automatic: CUDA first when built with
+`--features cuda` on an NVIDIA host, then Metal on macOS, DX12 on
+native Windows, and Vulkan → GL on Linux/WSL. Override with
+`EQUIUM_BACKEND=cuda|metal|dx12|vulkan|gl` only when you need to force
+a specific path.
+
+On macOS, run the GPU check from a logged-in Terminal session. Headless
+CI or SSH-only sessions can report `Metal: Supported` in
+`system_profiler` while `MTLCreateSystemDefaultDevice()` still returns
+no usable device to the process.
+
 If it prints `✓ GPU output matches CPU reference byte-for-byte`,
 you're good. If it prints a mismatch, please open a GitHub issue
 with the first-mismatch hex output and your `--info` (we'll add a

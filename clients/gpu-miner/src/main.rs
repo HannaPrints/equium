@@ -210,10 +210,13 @@ fn probe(backend: &str) -> Result<()> {
 ///   1. If `EQUIUM_BACKEND` is set, respect it (escape hatch).
 ///   2. CUDA (when compiled in via --features cuda) — bypasses the
 ///      SPIR-V driver bug entirely. NVIDIA-only.
-///   3. Vulkan via subprocess — preferred for non-NVIDIA hosts +
-///      NVIDIA hosts on healthy driver branches.
-///   4. GL via subprocess — fallback when Vulkan ICD is missing or
-///      the SPIR-V driver bug is in play.
+///   3. Pick the native wgpu backend for this OS: Metal on macOS,
+///      DX12 on native Windows, Vulkan on Linux/WSL.
+///   4. If Linux `nvidia-smi` reports a known-bad driver branch, skip
+///      Vulkan entirely and start with GL. Saves the user from
+///      waiting for the crash.
+///   5. Probe each candidate via subprocess. If that fails, return
+///      platform-specific troubleshooting steps.
 fn auto_pick_backend() -> std::result::Result<&'static str, String> {
     if let Ok(forced) = std::env::var("EQUIUM_BACKEND") {
         if !forced.trim().is_empty() {
@@ -222,39 +225,19 @@ fn auto_pick_backend() -> std::result::Result<&'static str, String> {
         }
     }
 
-    // Default probe order: vulkan → gl. CUDA inserts at the front
-    // when the feature was compiled in AND nvidia-smi reports a
-    // GPU (so we don't probe CUDA on AMD/Apple hosts that built
-    // with the feature off-handedly).
-    #[allow(unused_mut)]
-    let mut probe_order: Vec<&'static str> = vec!["vulkan", "gl"];
-    #[cfg(feature = "cuda")]
-    {
-        if nvidia_driver_version().is_some() {
-            probe_order.insert(0, "cuda");
-        }
-    }
-
-    // On a known-bad SPIR-V driver branch, skip Vulkan entirely.
-    // CUDA still works (different compile path) and GL still works
-    // (different translation), but the Vulkan probe will only
-    // burn 5s before exit-101'ing with "device is lost".
-    if let Some(drv) = nvidia_driver_version() {
-        if drv.starts_with("555.")
-            || drv.starts_with("565.")
-            || drv.starts_with("570.")
-            || drv.starts_with("575.")
+    let nvidia_driver = nvidia_driver_version();
+    if std::env::consts::OS == "linux" {
+        if let Some(drv) = nvidia_driver
+            .as_deref()
+            .filter(|drv| is_known_bad_spirv_driver(drv))
         {
             eprintln!(
                 "⚠ Detected NVIDIA driver {drv} — known SPIR-V crash branch, \
                  skipping Vulkan probe."
             );
-            probe_order.retain(|b| *b != "vulkan");
-            if probe_order.is_empty() {
-                probe_order.push("gl");
-            }
         }
     }
+    let probe_order = probe_order_for_platform(std::env::consts::OS, nvidia_driver.as_deref());
 
     let mut errors: Vec<String> = Vec::new();
     for &backend in &probe_order {
@@ -285,14 +268,63 @@ fn auto_pick_backend() -> std::result::Result<&'static str, String> {
     };
 
     Err(format!(
-        "No working GPU backend.\n\nProbes:\n  - {}\n{}\nTroubleshooting:\n  \
-        1. nvidia-smi              (driver present + healthy?)\n  \
-        2. vulkaninfo --summary    (Vulkan loader sees the GPU?)\n  \
-        3. lspci | grep -i vga     (kernel sees the card?)\n  \
-        4. File an issue: https://github.com/HannaPrints/equium/issues\n",
+        "No working GPU backend.\n\nProbes:\n  - {}\n{}\nTroubleshooting:\n{}",
         errors.join("\n  - "),
         driver_hint,
+        troubleshooting_for_platform(std::env::consts::OS)
     ))
+}
+
+fn probe_order_for_platform(os: &str, nvidia_driver: Option<&str>) -> Vec<&'static str> {
+    #[allow(unused_mut)]
+    let mut order = match os {
+        "macos" => vec!["metal"],
+        "windows" => vec!["dx12", "vulkan", "gl"],
+        "linux" if nvidia_driver.is_some_and(is_known_bad_spirv_driver) => vec!["gl"],
+        "linux" => vec!["vulkan", "gl"],
+        _ => vec!["primary"],
+    };
+
+    #[cfg(feature = "cuda")]
+    {
+        if nvidia_driver.is_some() {
+            order.insert(0, "cuda");
+        }
+    }
+
+    order
+}
+
+fn is_known_bad_spirv_driver(driver: &str) -> bool {
+    driver.starts_with("555.")
+        || driver.starts_with("565.")
+        || driver.starts_with("570.")
+        || driver.starts_with("575.")
+}
+
+fn troubleshooting_for_platform(os: &str) -> &'static str {
+    match os {
+        "macos" => {
+            "  1. system_profiler SPDisplaysDataType    (macOS sees the GPU?)\n  \
+        2. Run from a logged-in Terminal session, not CI/headless SSH\n  \
+        3. softwareupdate --install --all     (Metal driver updates ship with macOS)\n  \
+        4. Try EQUIUM_BACKEND=metal ./target/release/equium-gpu-miner verify\n  \
+        5. File an issue: https://github.com/HannaPrints/equium/issues\n"
+        }
+        "windows" => {
+            "  1. dxdiag                              (Windows sees the GPU?)\n  \
+        2. Update your GPU driver from NVIDIA/AMD/Intel\n  \
+        3. Try EQUIUM_BACKEND=dx12 ./target/release/equium-gpu-miner verify\n  \
+        4. File an issue: https://github.com/HannaPrints/equium/issues\n"
+        }
+        _ => {
+            "  1. nvidia-smi              (driver present + healthy?)\n  \
+        2. vulkaninfo --summary    (Vulkan loader sees the GPU?)\n  \
+        3. lspci | grep -i vga     (kernel sees the card?)\n  \
+        4. On NVIDIA 555/565/570/575: sudo apt install -y nvidia-driver-535-server\n  \
+        5. File an issue: https://github.com/HannaPrints/equium/issues\n"
+        }
+    }
 }
 
 /// Spawn `self probe --backend=<backend>` and read the result. The
@@ -318,44 +350,45 @@ fn probe_subprocess(backend: &str) -> std::result::Result<String, String> {
         let name = String::from_utf8_lossy(&out.stderr).trim().to_string();
         Ok(if name.is_empty() { backend.to_string() } else { name })
     } else {
-        // Surface the child's stderr — that's where wgpu's panic
-        // message lives. Pluck the most signal-rich lines (panicked /
-        // Error: / VK_ERROR) and fall back to the tail if none match.
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        let interesting: Vec<&str> = stderr
-            .lines()
-            .filter(|l| {
-                let lo = l.to_lowercase();
-                lo.contains("panic")
-                    || lo.contains("error")
-                    || lo.contains("vk_error")
-                    || lo.starts_with("caused by")
-            })
-            .take(3)
-            .collect();
-        let summary = if !interesting.is_empty() {
-            interesting.join(" · ")
-        } else {
-            stderr
-                .lines()
-                .rev()
-                .filter(|l| !l.trim().is_empty())
-                .take(2)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join(" · ")
-        };
-        let summary = summary.chars().take(220).collect::<String>();
-        if let Some(code) = out.status.code() {
-            Err(format!("exit {code} — {summary}"))
-        } else {
-            // No exit code → killed by a signal. On *nix the most common
-            // signal that hits us here is SIGSEGV from the driver.
-            Err(format!("killed by signal (likely SIGSEGV — driver crash) — {summary}"))
+        Err(probe_failure_reason(
+            out.status.code(),
+            &out.stdout,
+            &out.stderr,
+        ))
+    }
+}
+
+fn probe_failure_reason(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> String {
+    let detail = probe_output_detail(stdout, stderr);
+    match (code, detail) {
+        (Some(code), Some(detail)) => format!("exit {code}: {detail}"),
+        (Some(code), None) => format!("exit {code}"),
+        (None, Some(detail)) => format!("killed by signal: {detail}"),
+        (None, None) => "killed by signal (likely SIGSEGV — driver crash)".to_string(),
+    }
+}
+
+fn probe_output_detail(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    for bytes in [stderr, stdout] {
+        let text = String::from_utf8_lossy(bytes);
+        for line in text.lines().map(str::trim) {
+            if let Some(rest) = line.strip_prefix("Error:") {
+                let rest = rest.trim();
+                if !rest.is_empty() {
+                    return Some(rest.to_string());
+                }
+            }
         }
     }
+
+    for bytes in [stderr, stdout] {
+        let text = String::from_utf8_lossy(bytes);
+        if let Some(line) = text.lines().map(str::trim).find(|line| !line.is_empty()) {
+            return Some(line.to_string());
+        }
+    }
+
+    None
 }
 
 /// Read the NVIDIA driver version via `nvidia-smi`. Returns None when
@@ -379,6 +412,40 @@ fn nvidia_driver_version() -> Option<String> {
         None
     } else {
         Some(s)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn macos_probe_order_uses_metal() {
+        assert_eq!(probe_order_for_platform("macos", None), vec!["metal"]);
+    }
+
+    #[test]
+    fn linux_probe_order_keeps_gl_fallback() {
+        assert_eq!(
+            probe_order_for_platform("linux", None),
+            vec!["vulkan", "gl"]
+        );
+    }
+
+    #[test]
+    fn linux_nvidia_575_probe_order_skips_vulkan() {
+        assert_eq!(
+            probe_order_for_platform("linux", Some("575.64.03")),
+            vec!["gl"]
+        );
+    }
+
+    #[test]
+    fn probe_failure_reason_includes_child_stderr() {
+        assert_eq!(
+            probe_failure_reason(Some(1), b"", b"Error: no compatible GPU adapter found\n"),
+            "exit 1: no compatible GPU adapter found"
+        );
     }
 }
 

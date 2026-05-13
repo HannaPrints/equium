@@ -244,7 +244,10 @@ cargo build --release -p equium-gpu-miner
   --keypair ~/.config/solana/id.json`}</Pre>
               <P>
                 Apple Silicon talks to the GPU over Metal; everything
-                stays on-device, no driver install. Once it's mining,
+                stays on-device, no driver install. Run this from a
+                logged-in Terminal session; headless CI/SSH sessions can
+                see the GPU in <Code>system_profiler</Code> while Metal
+                still gives the process no usable device. Once it's mining,
                 see{" "}
                 <a href="#advanced" className="text-[var(--color-rose)] hover:underline">
                   Tune your GPU miner
